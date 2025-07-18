@@ -4,6 +4,7 @@ import com.nak.engine.entity.Camera;
 import com.nak.engine.input.InputHandler;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
+import com.nak.engine.debug.UniformFix;
 import org.joml.Matrix4f;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
@@ -148,6 +149,8 @@ public class Window {
 
     private void initializeOpenGL() {
         GL.createCapabilities();
+
+        UniformFix.fixAllShaderUniforms();
 
         // Enable features
         glEnable(GL_DEPTH_TEST);

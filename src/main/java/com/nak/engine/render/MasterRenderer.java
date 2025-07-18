@@ -1,15 +1,16 @@
-// Updated MasterRenderer.java - Integration with ShaderManager
+// Fixed MasterRenderer.java with proper lighting setup
 package com.nak.engine.render;
 
 import com.nak.engine.entity.Camera;
 import com.nak.engine.shader.ShaderManager;
 import com.nak.engine.shader.ShaderProgram;
 import com.nak.engine.shader.ShaderReloadListener;
-import com.nak.engine.shader.ShaderUtils;
+import com.nak.engine.util.ShaderUtils;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.lwjgl.opengl.GL11;
 
 import static org.lwjgl.opengl.GL11.*;
 
@@ -18,7 +19,7 @@ public class MasterRenderer implements ShaderReloadListener {
     // Shader manager
     private final ShaderManager shaderManager;
 
-    // Rendering components (existing)
+    // Rendering components
     private final TerrainManager terrainManager;
     private final AtmosphericRenderer atmosphericRenderer;
     private final ParticleRenderer particleRenderer;
@@ -32,11 +33,17 @@ public class MasterRenderer implements ShaderReloadListener {
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Matrix4f modelMatrix = new Matrix4f();
 
-    // Lighting system
-    private final Vector3f sunDirection = new Vector3f();
-    private final Vector3f sunColor = new Vector3f();
-    private final Vector3f ambientColor = new Vector3f();
+    // Lighting system - FIXED: Initialize with proper values
+    private final Vector3f sunDirection = new Vector3f(0.3f, -0.7f, 0.5f).normalize();
+    private final Vector3f sunColor = new Vector3f(1.0f, 0.95f, 0.8f);
+    private final Vector3f ambientColor = new Vector3f(0.3f, 0.35f, 0.5f);
+    private final Vector3f lightPosition = new Vector3f(100.0f, 100.0f, 100.0f);
     private float dayNightCycle = 0.0f;
+
+    // Lighting parameters - FIXED: Set proper default values
+    private float ambientStrength = 0.3f;
+    private float specularStrength = 0.5f;
+    private float shininess = 32.0f;
 
     // Rendering settings
     private boolean wireframeEnabled = false;
@@ -66,16 +73,15 @@ public class MasterRenderer implements ShaderReloadListener {
         setupOpenGLState();
     }
 
-
     private void initializeShaders() {
-        // Set shader directory (optional - for development)
+        // Set shader directory
         shaderManager.setShaderDirectory("src/main/resources/shaders");
 
         // Enable hot reload in debug mode
         boolean isDevelopment = Boolean.parseBoolean(System.getProperty("development", "false"));
         shaderManager.setHotReloadEnabled(isDevelopment);
 
-        // Load or create shader programs
+        // Load shader programs
         loadShaderPrograms();
 
         System.out.println("Initialized shader system with programs: " + shaderManager.getProgramNames());
@@ -83,23 +89,130 @@ public class MasterRenderer implements ShaderReloadListener {
 
     private void loadShaderPrograms() {
         try {
-            // Try to load from files first, fall back to built-in
+            // FIXED: Load shaders without problematic includes first
+            loadBasicShaders();
+
+            // Then try to load from files
             tryLoadShaderFromFiles();
         } catch (Exception e) {
-            System.out.println("Loading shaders from files failed, using built-in shaders");
-            // Built-in shaders are automatically loaded by ShaderManager
+            System.out.println("Loading shaders from files failed, using built-in shaders: " + e.getMessage());
         }
 
         // Validate that we have all required shaders
         validateShaders();
     }
 
-    private void tryLoadShaderFromFiles() {
-        // Load terrain shader from files if available
+    // FIXED: Load basic shaders without includes to avoid compilation issues
+    private void loadBasicShaders() {
+        // Create a simple terrain shader without includes
+        String simpleTerrainVert = """
+            #version 330 core
+            
+            layout (location = 0) in vec3 position;
+            layout (location = 1) in vec2 texCoord;
+            layout (location = 2) in vec3 normal;
+            layout (location = 3) in vec3 tangent;
+            layout (location = 4) in vec3 color;
+            
+            uniform mat4 projectionMatrix;
+            uniform mat4 viewMatrix;
+            uniform mat4 modelMatrix;
+            uniform mat4 lightSpaceMatrix;
+            
+            out vec3 fragPos;
+            out vec2 texCoords;
+            out vec3 fragNormal;
+            out vec3 fragTangent;
+            out vec3 vertexColor;
+            out vec4 fragPosLightSpace;
+            out float height;
+            
+            void main() {
+                vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                fragPos = worldPos.xyz;
+                texCoords = texCoord;
+                fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
+                fragTangent = mat3(transpose(inverse(modelMatrix))) * tangent;
+                vertexColor = color;
+                fragPosLightSpace = lightSpaceMatrix * worldPos;
+                height = position.y;
+            
+                gl_Position = projectionMatrix * viewMatrix * worldPos;
+            }
+            """;
+
+        String simpleTerrainFrag = """
+            #version 330 core
+            
+            in vec3 fragPos;
+            in vec2 texCoords;
+            in vec3 fragNormal;
+            in vec3 fragTangent;
+            in vec3 vertexColor;
+            in vec4 fragPosLightSpace;
+            in float height;
+            
+            uniform vec3 lightPosition;
+            uniform vec3 lightColor;
+            uniform vec3 lightDirection;
+            uniform float ambientStrength;
+            uniform float specularStrength;
+            uniform float shininess;
+            uniform vec3 viewPosition;
+            uniform vec3 fogColor;
+            uniform float fogDensity;
+            
+            out vec4 fragColor;
+            
+            vec3 calculateLighting() {
+                vec3 norm = normalize(fragNormal);
+                vec3 lightDir = normalize(lightPosition - fragPos);
+            
+                // Ambient
+                vec3 ambient = ambientStrength * lightColor;
+            
+                // Diffuse
+                float diff = max(dot(norm, lightDir), 0.0);
+                vec3 diffuse = diff * lightColor;
+            
+                // Specular
+                vec3 viewDir = normalize(viewPosition - fragPos);
+                vec3 reflectDir = reflect(-lightDir, norm);
+                float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+                vec3 specular = specularStrength * spec * lightColor;
+            
+                return ambient + diffuse + specular;
+            }
+            
+            void main() {
+                vec3 lighting = calculateLighting();
+                vec3 finalColor = vertexColor * lighting;
+            
+                // Apply fog
+                float distance = length(viewPosition - fragPos);
+                float fogFactor = exp(-fogDensity * distance);
+                fogFactor = clamp(fogFactor, 0.0, 1.0);
+                finalColor = mix(fogColor, finalColor, fogFactor);
+            
+                fragColor = vec4(finalColor, 1.0);
+            }
+            """;
+
         try {
-            shaderManager.loadProgram("terrain", "terrain.vert", "terrain.frag");
+            shaderManager.createProgram("terrain", simpleTerrainVert, simpleTerrainFrag);
+            System.out.println("Created simple terrain shader");
         } catch (Exception e) {
-            System.out.println("Could not load terrain shader from files: " + e.getMessage());
+            System.err.println("Failed to create simple terrain shader: " + e.getMessage());
+        }
+    }
+
+    private void tryLoadShaderFromFiles() {
+        // Try to load terrain shader from files (this might fail due to includes)
+        try {
+            shaderManager.loadProgram("terrain_advanced", "terrain.vert", "terrain.frag");
+            System.out.println("Loaded advanced terrain shader from files");
+        } catch (Exception e) {
+            System.out.println("Could not load advanced terrain shader: " + e.getMessage());
         }
 
         // Load other shaders
@@ -113,7 +226,6 @@ public class MasterRenderer implements ShaderReloadListener {
     }
 
     private void validateShaders() {
-        // Ensure we have all required shader programs
         String[] requiredPrograms = {"terrain", "basic", "skybox", "ui"};
 
         for (String programName : requiredPrograms) {
@@ -121,7 +233,6 @@ public class MasterRenderer implements ShaderReloadListener {
             if (program == null) {
                 System.err.println("Missing required shader program: " + programName);
             } else {
-                // Validate required uniforms for each program
                 validateProgramUniforms(program);
             }
         }
@@ -161,7 +272,7 @@ public class MasterRenderer implements ShaderReloadListener {
     }
 
     /**
-     * Main render method with enhanced shader management
+     * FIXED: Main render method with proper lighting setup
      */
     public void render(GameState gameState, Camera camera, float interpolation) {
         // Update time-based effects
@@ -176,8 +287,8 @@ public class MasterRenderer implements ShaderReloadListener {
         // Render sky
         renderSkyWithShaders(camera);
 
-        // Render terrain with enhanced shaders
-        renderTerrainWithShaders(camera);
+        // FIXED: Render terrain with proper lighting
+        renderTerrainWithProperLighting(camera);
 
         // Render objects
         renderObjectsWithShaders(gameState);
@@ -234,34 +345,93 @@ public class MasterRenderer implements ShaderReloadListener {
         }
     }
 
-    private void renderTerrainWithShaders(Camera camera) {
+    private void renderTerrainWithProperLighting(Camera camera) {
         ShaderProgram terrainProgram = shaderManager.getProgram("terrain");
-        if (terrainProgram != null) {
+        if (terrainProgram != null && terrainProgram.isLinked()) {
+
+            // Clear any existing OpenGL errors
+            while (GL11.glGetError() != GL11.GL_NO_ERROR) {
+                // Clear error queue
+            }
+
             terrainProgram.bind();
 
-            // Set camera uniforms
-            ShaderUtils.setCameraUniforms(terrainProgram, viewMatrix, projectionMatrix, camera.getPosition());
+            // Check if binding succeeded
+            int error = GL11.glGetError();
+            if (error != GL11.GL_NO_ERROR) {
+                System.err.println("Error binding terrain shader: " + error);
+                terrainProgram.unbind();
+                return;
+            }
 
-            // Set model matrix
-            terrainProgram.setUniform("modelMatrix", modelMatrix);
+            // Set uniforms safely - only set ones that exist
+            try {
+                // Camera uniforms
+                if (terrainProgram.hasUniform("projectionMatrix")) {
+                    terrainProgram.setUniform("projectionMatrix", projectionMatrix);
+                }
+                if (terrainProgram.hasUniform("viewMatrix")) {
+                    terrainProgram.setUniform("viewMatrix", viewMatrix);
+                }
+                if (terrainProgram.hasUniform("modelMatrix")) {
+                    terrainProgram.setUniform("modelMatrix", modelMatrix);
+                }
+                if (terrainProgram.hasUniform("viewPosition")) {
+                    terrainProgram.setUniform("viewPosition", camera.getPosition());
+                }
 
-            // Set lighting uniforms
-            ShaderUtils.setLightingUniforms(terrainProgram,
-                    new Vector3f(sunDirection).mul(1000), sunColor, sunDirection,
-                    0.3f, 0.5f, 32.0f);
+                // Lighting uniforms
+                if (terrainProgram.hasUniform("lightPosition")) {
+                    terrainProgram.setUniform("lightPosition", lightPosition);
+                }
+                if (terrainProgram.hasUniform("lightColor")) {
+                    terrainProgram.setUniform("lightColor", sunColor);
+                }
+                if (terrainProgram.hasUniform("lightDirection")) {
+                    terrainProgram.setUniform("lightDirection", sunDirection);
+                }
+                if (terrainProgram.hasUniform("ambientStrength")) {
+                    terrainProgram.setUniform("ambientStrength", ambientStrength);
+                }
+                if (terrainProgram.hasUniform("specularStrength")) {
+                    terrainProgram.setUniform("specularStrength", specularStrength);
+                }
+                if (terrainProgram.hasUniform("shininess")) {
+                    terrainProgram.setUniform("shininess", shininess);
+                }
 
-            // Set fog uniforms
-            ShaderUtils.setFogUniforms(terrainProgram, fogColor, fogDensity);
+                // Fog uniforms
+                if (terrainProgram.hasUniform("fogColor")) {
+                    terrainProgram.setUniform("fogColor", fogColor);
+                }
+                if (terrainProgram.hasUniform("fogDensity")) {
+                    terrainProgram.setUniform("fogDensity", fogDensity);
+                }
 
-            // Set time uniform for animations
-            ShaderUtils.setTimeUniform(terrainProgram, dayNightCycle);
+                // Light space matrix (for shadows)
+                if (terrainProgram.hasUniform("lightSpaceMatrix")) {
+                    Matrix4f lightSpaceMatrix = new Matrix4f().identity();
+                    terrainProgram.setUniform("lightSpaceMatrix", lightSpaceMatrix);
+                }
 
-            // Render terrain
-            terrainManager.render();
+                // Check for errors after setting uniforms
+                error = GL11.glGetError();
+                if (error != GL11.GL_NO_ERROR) {
+                    System.err.println("Error setting terrain uniforms: " + error);
+                } else {
+                    // Only render if no errors
+                    terrainManager.render();
+                }
+
+            } catch (Exception e) {
+                System.err.println("Exception setting terrain uniforms: " + e.getMessage());
+            }
 
             terrainProgram.unbind();
+
         } else {
-            // Fallback to legacy rendering
+            System.err.println("No valid terrain shader available for rendering!");
+            // Fallback to legacy rendering without shader
             terrainManager.render();
         }
     }
@@ -275,6 +445,12 @@ public class MasterRenderer implements ShaderReloadListener {
             Matrix4f mvpMatrix = new Matrix4f(projectionMatrix).mul(viewMatrix).mul(modelMatrix);
             basicProgram.setUniform("mvpMatrix", mvpMatrix);
 
+            // Set lighting for objects too
+            if (basicProgram.hasUniform("lightPosition")) {
+                basicProgram.setUniform("lightPosition", lightPosition);
+                basicProgram.setUniform("lightColor", sunColor);
+            }
+
             // Render objects here
             // objectRenderer.render();
 
@@ -283,7 +459,6 @@ public class MasterRenderer implements ShaderReloadListener {
     }
 
     private void renderParticlesWithShaders(Camera camera, float time) {
-        // Particles might use a specialized shader or the basic one
         ShaderProgram particleProgram = shaderManager.getProgram("particle");
         if (particleProgram == null) {
             particleProgram = shaderManager.getProgram("basic");
@@ -296,7 +471,6 @@ public class MasterRenderer implements ShaderReloadListener {
             glEnable(GL_BLEND);
             glDepthMask(false);
 
-            // Set uniforms for particles
             ShaderUtils.setCameraUniforms(particleProgram, viewMatrix, projectionMatrix, camera.getPosition());
             ShaderUtils.setTimeUniform(particleProgram, time);
 
@@ -354,6 +528,9 @@ public class MasterRenderer implements ShaderReloadListener {
                 (float) Math.sin(dayNightCycle + Math.PI / 2) * 0.3f
         ).normalize();
 
+        // Update light position based on sun direction
+        lightPosition.set(sunDirection).mul(1000.0f);
+
         // Update lighting colors based on time of day
         calculateLightingColors(sunHeight);
         updateFogSettings(sunHeight);
@@ -364,10 +541,12 @@ public class MasterRenderer implements ShaderReloadListener {
             float intensity = Math.min(1.0f, sunHeight * 2.0f);
             sunColor.set(1.0f, 0.95f + intensity * 0.05f, 0.8f + intensity * 0.2f);
             ambientColor.set(0.3f + intensity * 0.3f, 0.35f + intensity * 0.35f, 0.5f + intensity * 0.3f);
+            ambientStrength = 0.3f + intensity * 0.2f;
         } else {
             float moonlight = Math.max(0, -sunHeight * 0.5f);
             sunColor.set(0.4f + moonlight * 0.2f, 0.4f + moonlight * 0.2f, 0.6f + moonlight * 0.3f);
             ambientColor.set(0.05f + moonlight * 0.1f, 0.05f + moonlight * 0.1f, 0.15f + moonlight * 0.2f);
+            ambientStrength = 0.1f + moonlight * 0.2f;
         }
     }
 
@@ -389,34 +568,34 @@ public class MasterRenderer implements ShaderReloadListener {
                         "FOV: %.1f°\n" +
                         "Day/Night: %.1f°\n" +
                         "Fog Density: %.4f\n" +
+                        "Light Position: %.1f, %.1f, %.1f\n" +
+                        "Sun Color: %.2f, %.2f, %.2f\n" +
+                        "Ambient Strength: %.2f\n" +
                         "Active Shaders: %s",
                 pos.x, pos.y, pos.z,
                 camera.getFov(),
                 Math.toDegrees(dayNightCycle),
                 fogDensity,
+                lightPosition.x, lightPosition.y, lightPosition.z,
+                sunColor.x, sunColor.y, sunColor.z,
+                ambientStrength,
                 shaderManager.getProgramNames()
         );
     }
 
-    /**
-     * Handle shader reload events
-     */
     @Override
     public void onShaderReloaded(String programName) {
         System.out.println("Shader program reloaded: " + programName);
 
-        // Re-validate uniforms after reload
         ShaderProgram program = shaderManager.getProgram(programName);
         if (program != null) {
             validateProgramUniforms(program);
 
-            // Print available uniforms for debugging
             if (debugRenderingEnabled) {
                 program.printUniforms();
             }
         }
 
-        // Perform any specific actions based on which shader was reloaded
         switch (programName) {
             case "terrain":
                 System.out.println("Terrain shader reloaded - terrain rendering updated");
@@ -430,28 +609,19 @@ public class MasterRenderer implements ShaderReloadListener {
         }
     }
 
-    /**
-     * Reload specific shader program
-     */
+    // Additional methods for debugging and control
     public void reloadShader(String programName) {
         shaderManager.reloadProgram(programName);
     }
 
-    /**
-     * Reload all shaders
-     */
     public void reloadAllShaders() {
         shaderManager.reloadAllPrograms();
     }
 
-    /**
-     * Enable/disable debug features
-     */
     public void setDebugRenderingEnabled(boolean enabled) {
         this.debugRenderingEnabled = enabled;
 
         if (enabled) {
-            // Print current shader information
             System.out.println("=== SHADER DEBUG INFO ===");
             for (String programName : shaderManager.getProgramNames()) {
                 ShaderProgram program = shaderManager.getProgram(programName);
@@ -464,30 +634,19 @@ public class MasterRenderer implements ShaderReloadListener {
         }
     }
 
-    /**
-     * Enable/disable shader hot reloading
-     */
     public void setShaderHotReloadEnabled(boolean enabled) {
         shaderManager.setHotReloadEnabled(enabled);
         System.out.println("Shader hot reload " + (enabled ? "enabled" : "disabled"));
     }
 
-    /**
-     * Get shader manager for external access
-     */
     public ShaderManager getShaderManager() {
         return shaderManager;
     }
 
-    /**
-     * Cleanup all resources including shaders
-     */
     public void cleanup() {
         try {
-            // Remove shader reload listener
             shaderManager.removeReloadListener(this);
 
-            // Cleanup rendering components
             atmosphericRenderer.cleanup();
             particleRenderer.cleanup();
             skyRenderer.cleanup();
@@ -495,7 +654,6 @@ public class MasterRenderer implements ShaderReloadListener {
             uiRenderer.cleanup();
             objectRenderer.cleanup();
 
-            // Cleanup shader manager (this will cleanup all shader programs)
             shaderManager.cleanup();
 
         } catch (Exception e) {
@@ -523,114 +681,25 @@ public class MasterRenderer implements ShaderReloadListener {
     public void setFogDensity(float fogDensity) {
         this.fogDensity = Math.max(0.0f, Math.min(1.0f, fogDensity));
     }
-}
 
-// Example usage in main application
-class ShaderManagerExample {
-
-    public static void main(String[] args) {
-        // Enable development mode for hot reloading
-        System.setProperty("development", "true");
-
-        // Your existing initialization code...
-
-        // Get shader manager instance
-        ShaderManager shaderManager = ShaderManager.getInstance();
-
-        // Set custom shader directory
-        shaderManager.setShaderDirectory("assets/shaders");
-
-        // Enable hot reloading for development
-        shaderManager.setHotReloadEnabled(true);
-
-        // Create custom shaders
-        createCustomShaders(shaderManager);
-
-        // Add reload listener for custom handling
-        shaderManager.addReloadListener(programName -> {
-            System.out.println("Custom handler: Shader " + programName + " was reloaded!");
-        });
+    // FIXED: Add methods to control lighting
+    public void setAmbientStrength(float ambientStrength) {
+        this.ambientStrength = Math.max(0.0f, Math.min(1.0f, ambientStrength));
     }
 
-    private static void createCustomShaders(ShaderManager shaderManager) {
-        // Create a custom water shader
-        String waterVertexShader = """
-                #version 330 core
-                #include "common.glsl"
-                
-                layout (location = 0) in vec3 position;
-                layout (location = 1) in vec2 texCoord;
-                
-                uniform mat4 projectionMatrix;
-                uniform mat4 viewMatrix;
-                uniform mat4 modelMatrix;
-                uniform float time;
-                
-                out vec2 texCoords;
-                out vec3 worldPos;
-                out float waveHeight;
-                
-                void main() {
-                    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-                
-                    // Add wave animation
-                    float wave1 = sin(worldPosition.x * 0.02 + time * 2.0) * 0.5;
-                    float wave2 = cos(worldPosition.z * 0.015 + time * 1.5) * 0.3;
-                    waveHeight = wave1 + wave2;
-                    worldPosition.y += waveHeight;
-                
-                    worldPos = worldPosition.xyz;
-                    texCoords = texCoord;
-                
-                    gl_Position = projectionMatrix * viewMatrix * worldPosition;
-                }
-                """;
+    public void setSpecularStrength(float specularStrength) {
+        this.specularStrength = Math.max(0.0f, Math.min(1.0f, specularStrength));
+    }
 
-        String waterFragmentShader = """
-                #version 330 core
-                #include "common.glsl"
-                #include "lighting.glsl"
-                
-                in vec2 texCoords;
-                in vec3 worldPos;
-                in float waveHeight;
-                
-                uniform sampler2D waterTexture;
-                uniform sampler2D normalMap;
-                uniform float time;
-                uniform vec3 viewPosition;
-                
-                out vec4 fragColor;
-                
-                void main() {
-                    // Animated texture coordinates
-                    vec2 animatedTexCoords = texCoords + vec2(time * 0.05, time * 0.03);
-                
-                    // Sample textures
-                    vec4 waterColor = texture(waterTexture, animatedTexCoords);
-                    vec3 normal = texture(normalMap, animatedTexCoords * 2.0).rgb * 2.0 - 1.0;
-                
-                    // Calculate lighting
-                    vec3 lighting = calculateLighting(worldPos, normal);
-                
-                    // Add reflection and refraction effects
-                    vec3 viewDir = normalize(viewPosition - worldPos);
-                    float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.0);
-                
-                    vec3 finalColor = waterColor.rgb * lighting;
-                    finalColor = mix(finalColor, vec3(0.2, 0.6, 1.0), fresnel * 0.3);
-                
-                    // Apply fog
-                    float fogFactor = calculateFog(worldPos);
-                    finalColor = applyFog(finalColor, fogFactor);
-                
-                    fragColor = vec4(finalColor, 0.8 + waveHeight * 0.1);
-                }
-                """;
+    public void setSunColor(float r, float g, float b) {
+        this.sunColor.set(r, g, b);
+    }
 
-        // Create the water shader program
-        shaderManager.createProgram("water", waterVertexShader, waterFragmentShader);
+    public Vector3f getSunDirection() {
+        return new Vector3f(sunDirection);
+    }
 
-        System.out.println("Created custom water shader");
+    public Vector3f getLightPosition() {
+        return new Vector3f(lightPosition);
     }
 }

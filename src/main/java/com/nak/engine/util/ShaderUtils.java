@@ -1,5 +1,6 @@
-package com.nak.engine.shader;
+package com.nak.engine.util;
 
+import com.nak.engine.shader.ShaderProgram;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 

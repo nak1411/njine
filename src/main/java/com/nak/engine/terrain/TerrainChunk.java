@@ -200,60 +200,6 @@ public class TerrainChunk {
         }
     }
 
-    /**
-     * Improved vertex color calculation with height-based biomes
-     */
-    private Vector3f calculateVertexColor(float height, Vector3f normal, float worldX, float worldZ) {
-        // Normalize height for color calculation
-        float normalizedHeight = Math.max(0, Math.min(1, (height + 10) / 50.0f));
-        float slope = Math.max(0, 1.0f - normal.y);
-
-        // Base color from height
-        Vector3f color = new Vector3f();
-
-        if (height < -2.0f) {
-            // Deep water - blue
-            color.set(0.1f, 0.3f, 0.8f);
-        } else if (height < 0.0f) {
-            // Shallow water/beach - blue to sand transition
-            float t = (height + 2.0f) / 2.0f;
-            color.set(0.1f + t * 0.5f, 0.3f + t * 0.4f, 0.8f - t * 0.3f);
-        } else if (height < 5.0f) {
-            // Grassland - green
-            color.set(0.2f, 0.6f, 0.1f);
-        } else if (height < 15.0f) {
-            // Hills - green to brown transition
-            float t = (height - 5.0f) / 10.0f;
-            color.set(0.2f + t * 0.3f, 0.6f - t * 0.2f, 0.1f + t * 0.1f);
-        } else if (height < 25.0f) {
-            // Mountains - brown/rock
-            color.set(0.5f, 0.4f, 0.3f);
-        } else {
-            // Snow caps - white
-            float snowAmount = Math.min(1.0f, (height - 25.0f) / 10.0f);
-            color.set(0.5f + snowAmount * 0.4f, 0.4f + snowAmount * 0.5f, 0.3f + snowAmount * 0.6f);
-        }
-
-        // Adjust for slope (rocky areas are darker)
-        if (slope > 0.3f) {
-            float rockiness = Math.min(1.0f, slope * 2.0f);
-            color.mul(1.0f - rockiness * 0.3f);
-            color.x += rockiness * 0.2f; // Add some brown
-        }
-
-        // Add some random variation
-        float noise = (float) (Math.sin(worldX * 0.1f) * Math.cos(worldZ * 0.1f)) * 0.1f + 0.9f;
-        color.mul(noise);
-
-        // Clamp to valid range
-        color.x = Math.max(0, Math.min(1, color.x));
-        color.y = Math.max(0, Math.min(1, color.y));
-        color.z = Math.max(0, Math.min(1, color.z));
-
-        return color;
-    }
-
-
     private Vector3f calculateNormalOptimized(float x, float z, float stepSize) {
         float h = stepSize * 0.5f; // Half step for better accuracy
 
