@@ -8,6 +8,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL20;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.util.*;
 
 public class ShaderProgram {
@@ -82,23 +83,33 @@ public class ShaderProgram {
     private void cacheUniformLocations() {
         int uniformCount = GL20.glGetProgrami(programId, GL20.GL_ACTIVE_UNIFORMS);
 
+        // Create buffers for the glGetActiveUniform call
+        IntBuffer sizeBuffer = BufferUtils.createIntBuffer(1);
+        IntBuffer typeBuffer = BufferUtils.createIntBuffer(1);
+
         for (int i = 0; i < uniformCount; i++) {
-            String uniformName = GL20.glGetActiveUniform(programId, i, 256);
+            // Reset buffers
+            sizeBuffer.clear();
+            typeBuffer.clear();
 
-            // Remove array indicators for cleaner names
-            if (uniformName.contains("[")) {
-                uniformName = uniformName.substring(0, uniformName.indexOf('['));
-            }
+            // Get uniform info - this is the corrected method call
+            String uniformName = GL20.glGetActiveUniform(programId, i, sizeBuffer, typeBuffer);
 
-            int location = GL20.glGetUniformLocation(programId, uniformName);
-            if (location != -1) {
-                uniformLocations.put(uniformName, location);
+            if (uniformName != null) {
+                // Remove array indicators for cleaner names
+                if (uniformName.contains("[")) {
+                    uniformName = uniformName.substring(0, uniformName.indexOf('['));
+                }
 
-                // Get uniform info
-                int[] size = new int[1];
-                int[] type = new int[1];
-                GL20.glGetActiveUniform(programId, i, size, type);
-                uniformInfo.put(uniformName, new UniformInfo(uniformName, type[0], size[0]));
+                int location = GL20.glGetUniformLocation(programId, uniformName);
+                if (location != -1) {
+                    uniformLocations.put(uniformName, location);
+
+                    // Store uniform info
+                    int size = sizeBuffer.get(0);
+                    int type = typeBuffer.get(0);
+                    uniformInfo.put(uniformName, new UniformInfo(uniformName, type, size));
+                }
             }
         }
 
