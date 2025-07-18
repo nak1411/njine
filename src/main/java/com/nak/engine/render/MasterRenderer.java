@@ -4,6 +4,7 @@ package com.nak.engine.render;
 import com.nak.engine.entity.Camera;
 import com.nak.engine.shader.ShaderManager;
 import com.nak.engine.shader.ShaderProgram;
+import com.nak.engine.shader.ShaderReloadListener;
 import com.nak.engine.shader.ShaderUtils;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
@@ -12,7 +13,7 @@ import org.joml.Vector3f;
 
 import static org.lwjgl.opengl.GL11.*;
 
-public class MasterRenderer implements ShaderManager.ShaderReloadListener {
+public class MasterRenderer implements ShaderReloadListener {
 
     // Shader manager
     private final ShaderManager shaderManager;
@@ -64,6 +65,7 @@ public class MasterRenderer implements ShaderManager.ShaderReloadListener {
         // Configure OpenGL state
         setupOpenGLState();
     }
+
 
     private void initializeShaders() {
         // Set shader directory (optional - for development)
