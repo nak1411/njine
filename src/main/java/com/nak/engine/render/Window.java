@@ -16,16 +16,19 @@ import java.nio.IntBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL13.GL_MULTISAMPLE;
 import static org.lwjgl.system.MemoryUtil.NULL;
 
 public class Window {
 
     private long window;
     private boolean running = false;
+    private int windowWidth = 1920;
+    private int windowHeight = 1080;
 
     // Timing variables
     private static final double TARGET_FPS = 60.0;
-    private static final double TARGET_UPS = 60.0; // Updates per second
+    private static final double TARGET_UPS = 60.0;
     private static final double NS_PER_UPDATE = 1_000_000_000.0 / TARGET_UPS;
     private static final double NS_PER_FRAME = 1_000_000_000.0 / TARGET_FPS;
 
@@ -35,8 +38,10 @@ public class Window {
     private long lastSecond = 0;
     private int frameCount = 0;
     private int updateCount = 0;
+    private long totalFrameTime = 0;
+    private long maxFrameTime = 0;
 
-    // Game state
+    // Game components
     private GameState gameState;
     private MasterRenderer renderer;
     private InputHandler inputHandler;
@@ -45,101 +50,151 @@ public class Window {
     private FloatBuffer matrixBuffer;
     private TerrainManager terrainManager;
 
+    // Rendering settings
+    private boolean vsyncEnabled = true;
+    private boolean fullscreen = false;
+    private int msaaSamples = 4;
+
     public void init() {
-        // Set up an error callback. The default implementation
-        // will print the error message in System.err.
+        // Set up error callback
         GLFWErrorCallback.createPrint(System.err).set();
 
-        // Initialize GLFW. Most GLFW functions will not work before doing this.
-        if (!glfwInit())
+        if (!glfwInit()) {
             throw new IllegalStateException("Unable to initialize GLFW");
+        }
 
-        // Configure GLFW
+        // Configure GLFW with modern OpenGL context
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-        //glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        //glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-        // Create the window
-        window = glfwCreateWindow(1920, 1080, "Hello World!", NULL, NULL);
-        if (window == NULL)
+        // Anti-aliasing
+        glfwWindowHint(GLFW_SAMPLES, msaaSamples);
+
+        // Create window
+        window = glfwCreateWindow(windowWidth, windowHeight, "Enhanced Terrain Engine", NULL, NULL);
+        if (window == NULL) {
             throw new RuntimeException("Failed to create the GLFW window");
+        }
 
-        // Set up a key callback. It will be called every time a key is pressed, repeated or released.
-        glfwSetKeyCallback(window, (window, key, scancode, action, mods) -> {
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE)
-                glfwSetWindowShouldClose(window, true); // We will detect this in the rendering loop
+        setupCallbacks();
+        setupWindow();
+        initializeOpenGL();
+        initializeGameComponents();
+
+        running = true;
+        System.out.println("Enhanced Terrain Engine initialized successfully!");
+        System.out.println("OpenGL Version: " + glGetString(GL_VERSION));
+        System.out.println("Graphics Card: " + glGetString(GL_RENDERER));
+    }
+
+    private void setupCallbacks() {
+        // Window size callback
+        glfwSetWindowSizeCallback(window, (window, width, height) -> {
+            this.windowWidth = width;
+            this.windowHeight = height;
+            glViewport(0, 0, width, height);
+
+            // Update projection matrix
+            updateProjectionMatrix();
+
+            // Update camera aspect ratio
+            camera.setAspectRatio((float) width / (float) height);
         });
 
-        // Setup mouse callback for camera
-        glfwSetCursorPosCallback(window, (window, xpos, ypos) -> {
-            if (camera != null) {
-                camera.processMouse(xpos, ypos);
+        // Window focus callback
+        glfwSetWindowFocusCallback(window, (window, focused) -> {
+            if (inputHandler != null) {
+                inputHandler.onWindowFocus(focused);
             }
         });
 
-        // Hide and capture cursor
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        // Cursor position callback
+        glfwSetCursorPosCallback(window, (window, xpos, ypos) -> {
+            if (camera != null && inputHandler != null && inputHandler.isMouseLocked()) {
+                camera.processMouse(xpos, ypos);
+            }
+        });
+    }
 
-        // Get the thread stack and push a new frame
+    private void setupWindow() {
+        // Center window
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer pWidth = stack.mallocInt(1); // int*
-            IntBuffer pHeight = stack.mallocInt(1); // int*
+            IntBuffer pWidth = stack.mallocInt(1);
+            IntBuffer pHeight = stack.mallocInt(1);
 
-            // Get the window size passed to glfwCreateWindow
             glfwGetWindowSize(window, pWidth, pHeight);
-
-            // Get the resolution of the primary monitor
             GLFWVidMode vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
 
-            // Center the window
-
-            // Center window
-            long monitor = glfwGetPrimaryMonitor();
-            glfwGetMonitorWorkarea(monitor, null, null, pWidth, pHeight);
             glfwSetWindowPos(window,
-                    (pWidth.get(0) - 1920) / 2,
-                    (pHeight.get(0) - 1080) / 2);
-        } // the stack frame is popped automatically
+                    (vidmode.width() - pWidth.get(0)) / 2,
+                    (vidmode.height() - pHeight.get(0)) / 2);
+        }
 
-        // Make the OpenGL context current
+        // Make OpenGL context current
         glfwMakeContextCurrent(window);
-        // Enable v-sync(0 for manual limiting)
-        glfwSwapInterval(1);
 
-        // Make the window visible
+        // Set v-sync
+        glfwSwapInterval(vsyncEnabled ? 1 : 0);
+
+        // Show window
         glfwShowWindow(window);
+    }
 
-        // This line is critical for LWJGL's interoperation with GLFW's
-        // OpenGL context, or any context that is managed externally.
-        // LWJGL detects the context that is current in the current thread,
-        // creates the GLCapabilities instance and makes the OpenGL
-        // bindings available for use.
+    private void initializeOpenGL() {
         GL.createCapabilities();
-        glEnable(GL_DEPTH_TEST);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
-        // Create matrix buffer for OpenGL
+        // Enable features
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glFrontFace(GL_CCW);
+
+        // Enable MSAA if available
+        if (msaaSamples > 0) {
+            glEnable(GL_MULTISAMPLE);
+        }
+
+        // Set clear color
+        glClearColor(0.05f, 0.05f, 0.1f, 1.0f);
+
+        // Create matrix buffer
         matrixBuffer = MemoryUtil.memAllocFloat(16);
 
-        // Setup perspective projection using JOML
+        // Setup projection matrix
+        updateProjectionMatrix();
+    }
+
+    private void updateProjectionMatrix() {
         projectionMatrix = new Matrix4f();
-        projectionMatrix.perspective((float) Math.toRadians(45.0f), 1920.0f / 1080.0f, 0.1f, 1000.0f);
+        projectionMatrix.perspective(
+                (float) Math.toRadians(45.0f),
+                (float) windowWidth / (float) windowHeight,
+                0.1f,
+                1000.0f
+        );
 
         glMatrixMode(GL_PROJECTION);
         glLoadMatrixf(projectionMatrix.get(matrixBuffer));
         glMatrixMode(GL_MODELVIEW);
+    }
 
+    private void initializeGameComponents() {
         // Initialize game components
         camera = new Camera();
+        camera.setAspectRatio((float) windowWidth / (float) windowHeight);
+
         gameState = new GameState();
         terrainManager = new TerrainManager();
         renderer = new MasterRenderer(terrainManager);
         inputHandler = new InputHandler(window, camera);
 
-        running = true;
+        System.out.println("Game components initialized");
+        System.out.println(inputHandler.getControlsHelp());
     }
 
     public void run() {
@@ -149,15 +204,17 @@ public class Window {
         double accumulator = 0.0;
         long frameTimer = System.nanoTime();
 
+        System.out.println("Starting main loop...");
+
         while (!glfwWindowShouldClose(window) && running) {
+            long frameStart = System.nanoTime();
             long currentTime = System.nanoTime();
-            double deltaTime = (currentTime - lastTime) / 1_000_000_000.0; // Convert to seconds
+            double deltaTime = (currentTime - lastTime) / 1_000_000_000.0;
             lastTime = currentTime;
 
             // Cap delta time to prevent spiral of death
             deltaTime = Math.min(deltaTime, 0.25);
-
-            accumulator += deltaTime * 1_000_000_000.0; // Convert back to nanoseconds
+            accumulator += deltaTime * 1_000_000_000.0;
 
             // Handle input
             inputHandler.processInput((float) (NS_PER_UPDATE / 1_000_000_000.0));
@@ -172,20 +229,26 @@ public class Window {
             // Interpolation factor for smooth rendering
             float interpolation = (float) (accumulator / NS_PER_UPDATE);
 
-            // Render with interpolation
+            // Render
             render(interpolation);
             frameCount++;
 
-            // Frame limiting
-            long frameTime = System.nanoTime() - frameTimer;
-            if (frameTime < NS_PER_FRAME) {
-                try {
-                    Thread.sleep((long) ((NS_PER_FRAME - frameTime) / 1_000_000));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+            // Calculate frame time
+            long frameEnd = System.nanoTime();
+            long frameTime = frameEnd - frameStart;
+            totalFrameTime += frameTime;
+            maxFrameTime = Math.max(maxFrameTime, frameTime);
+
+            // Frame limiting (only if vsync is disabled)
+            if (!vsyncEnabled) {
+                if (frameTime < NS_PER_FRAME) {
+                    try {
+                        Thread.sleep((long) ((NS_PER_FRAME - frameTime) / 1_000_000));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
             }
-            frameTimer = System.nanoTime();
 
             // Update performance counters
             updatePerformanceCounters(currentTime);
@@ -195,46 +258,206 @@ public class Window {
         }
 
         cleanup();
+        System.out.println("Application terminated successfully");
     }
 
     private void update(float deltaTime) {
-        camera.update(deltaTime);
-        terrainManager.update(camera.getPosition(), deltaTime);
+        // Update game state
         gameState.update(deltaTime);
+
+        // Update camera
+        camera.update(deltaTime);
+
+        // Update terrain with camera position
+        terrainManager.update(camera.getPosition(), deltaTime);
+
+        // Handle special input commands
+        handleSpecialCommands();
+    }
+
+    private void handleSpecialCommands() {
+        // Check for application exit
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS &&
+                glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+            running = false;
+        }
+
+        // Toggle fullscreen
+        if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS) {
+            toggleFullscreen();
+        }
+
+        // Toggle vsync
+        if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS &&
+                glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+            toggleVSync();
+        }
     }
 
     private void render(float interpolation) {
+        // Clear buffers
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        // Set wireframe mode based on input
+        if (inputHandler.isWireframeMode()) {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        } else {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        // Apply camera transformation
         glLoadIdentity();
         camera.applyTransform(matrixBuffer);
 
+        // Render scene
         renderer.render(gameState, camera, interpolation);
 
+        // Render debug information if enabled
+        if (inputHandler.isShowDebugInfo()) {
+            renderDebugInfo();
+        }
+
+        // Swap buffers
         glfwSwapBuffers(window);
+    }
+
+    private void renderDebugInfo() {
+        // Switch to 2D rendering for debug text
+        glDisable(GL_DEPTH_TEST);
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0, windowWidth, windowHeight, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        // Render performance info (simple text rendering would need font system)
+        // For now, we'll just update the window title with debug info
+        updateDebugTitle();
+
+        // Restore 3D rendering
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    private void updateDebugTitle() {
+        String title = String.format(
+                "Enhanced Terrain Engine - FPS: %d, UPS: %d, Avg: %.2fms, Max: %.2fms, Pos: %.1f,%.1f,%.1f",
+                fps, ups,
+                (totalFrameTime / Math.max(1, frameCount)) / 1_000_000.0,
+                maxFrameTime / 1_000_000.0,
+                camera.getPosition().x,
+                camera.getPosition().y,
+                camera.getPosition().z
+        );
+        glfwSetWindowTitle(window, title);
     }
 
     private void updatePerformanceCounters(long currentTime) {
         if (currentTime - lastSecond >= 1_000_000_000L) {
             fps = frameCount;
             ups = updateCount;
+
+            // Reset counters
             frameCount = 0;
             updateCount = 0;
+            totalFrameTime = 0;
+            maxFrameTime = 0;
             lastSecond = currentTime;
 
-            // Update window title with performance info
-            glfwSetWindowTitle(window, String.format("Game Loop - FPS: %d, UPS: %d", fps, ups));
+            // Print performance info to console
+            if (inputHandler.isShowDebugInfo()) {
+                System.out.printf("Performance: FPS=%d, UPS=%d, Camera: %.1f,%.1f,%.1f%n",
+                        fps, ups, camera.getPosition().x, camera.getPosition().y, camera.getPosition().z);
+            }
         }
     }
 
-    private void cleanup() {
-        terrainManager.cleanup();
-        renderer.cleanup();
+    private void toggleFullscreen() {
+        fullscreen = !fullscreen;
+        if (fullscreen) {
+            // Get primary monitor
+            long monitor = glfwGetPrimaryMonitor();
+            GLFWVidMode vidMode = glfwGetVideoMode(monitor);
 
+            // Store window position and size for restoration
+            glfwSetWindowMonitor(window, monitor, 0, 0,
+                    vidMode.width(), vidMode.height(), vidMode.refreshRate());
+        } else {
+            // Return to windowed mode
+            glfwSetWindowMonitor(window, NULL, 100, 100,
+                    windowWidth, windowHeight, GLFW_DONT_CARE);
+        }
+    }
+
+    private void toggleVSync() {
+        vsyncEnabled = !vsyncEnabled;
+        glfwSwapInterval(vsyncEnabled ? 1 : 0);
+        System.out.println("V-Sync " + (vsyncEnabled ? "enabled" : "disabled"));
+    }
+
+    private void cleanup() {
+        System.out.println("Cleaning up resources...");
+
+        // Cleanup game components
+        if (terrainManager != null) terrainManager.cleanup();
+        if (renderer != null) renderer.cleanup();
+
+        // Free memory
         if (matrixBuffer != null) {
             MemoryUtil.memFree(matrixBuffer);
         }
+
+        // Destroy window and terminate GLFW
         glfwDestroyWindow(window);
         glfwTerminate();
+
+        // Free error callback
+        GLFWErrorCallback callback = glfwSetErrorCallback(null);
+        if (callback != null) {
+            callback.free();
+        }
+    }
+
+    // Getters for external access
+    public long getWindow() {
+        return window;
+    }
+
+    public int getWindowWidth() {
+        return windowWidth;
+    }
+
+    public int getWindowHeight() {
+        return windowHeight;
+    }
+
+    public boolean isRunning() {
+        return running;
+    }
+
+    public boolean isVSyncEnabled() {
+        return vsyncEnabled;
+    }
+
+    public boolean isFullscreen() {
+        return fullscreen;
+    }
+
+    public int getFPS() {
+        return fps;
+    }
+
+    public int getUPS() {
+        return ups;
+    }
+
+    // Setters
+    public void setRunning(boolean running) {
+        this.running = running;
     }
 }
