@@ -8,6 +8,7 @@ import java.nio.IntBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
@@ -58,11 +59,14 @@ public class TerrainChunk {
     private final FastNoise noiseGenerator;
     private CompletableFuture<Void> generationTask;
 
+    private static final AtomicInteger activeChunks = new AtomicInteger(0);
+
     public TerrainChunk(Vector3f position, float size, int level) {
         this.position = new Vector3f(position);
         this.size = size;
         this.level = level;
         this.noiseGenerator = new FastNoise();
+        activeChunks.incrementAndGet();
     }
 
     /**
@@ -460,6 +464,11 @@ public class TerrainChunk {
         return needsUpdate;
     }
 
+    // Add memory monitoring
+    public static int getActiveChunkCount() {
+        return activeChunks.get();
+    }
+
     public void cleanup() {
         if (buffersCreated) {
             glDeleteVertexArrays(vao);
@@ -474,6 +483,8 @@ public class TerrainChunk {
 
         vertices = null;
         indices = null;
+
+        activeChunks.decrementAndGet();
     }
 
     // Getters
