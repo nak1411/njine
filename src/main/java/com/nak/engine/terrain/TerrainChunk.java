@@ -4,6 +4,7 @@ import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 
 import static org.lwjgl.opengl.GL11.*;
 
@@ -91,16 +92,27 @@ class TerrainChunk {
 
     public void render() {
         if (!generated || !visible) return;
-        System.out.println("GEN");
-        FloatBuffer quadBuffer = BufferUtils.createFloatBuffer(vertices.length);
 
+        // Create buffers and populate them
+        FloatBuffer vertexBuffer = BufferUtils.createFloatBuffer(vertices.length);
+        vertexBuffer.put(vertices);
+        vertexBuffer.flip();
 
+        IntBuffer indexBuffer = BufferUtils.createIntBuffer(indices.length);
+        indexBuffer.put(indices);
+        indexBuffer.flip();
+
+        // Enable vertex arrays
         glEnableClientState(GL_VERTEX_ARRAY);
-        glVertexPointer(3, GL_FLOAT, 0, quadBuffer);
-        glDrawElements(GL_TRIANGLES, indices.length, GL_UNSIGNED_INT, indices.length / 3);
+
+        // Set vertex pointer
+        glVertexPointer(3, GL_FLOAT, 0, vertexBuffer);
+
+        // Draw elements
+        glDrawElements(GL_TRIANGLES, indexBuffer);
+
+        // Disable vertex arrays
         glDisableClientState(GL_VERTEX_ARRAY);
-
-
     }
 
     public boolean isVisible() {
