@@ -3,305 +3,406 @@ package com.nak.engine.input;
 import com.nak.engine.entity.Camera;
 import org.joml.Vector3f;
 
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.lwjgl.glfw.GLFW.*;
 
 public class InputHandler {
-    private long window;
-    private Camera camera;
+    private final long window;
+    private final Camera camera;
 
-    // FIXED: Use proper key range instead of GLFW_KEY_LAST
-    private static final int MIN_KEY = GLFW_KEY_SPACE; // 32
-    private static final int MAX_KEY = GLFW_KEY_LAST;  // 348
-    private static final int KEY_RANGE = MAX_KEY - MIN_KEY + 1;
-
-    // Key states for smooth movement - FIXED size and indexing
-    private boolean[] keyStates = new boolean[KEY_RANGE];
-    private boolean[] previousKeyStates = new boolean[KEY_RANGE];
+    // Input state management
+    private final Map<InputAction, Boolean> actionStates = new EnumMap<>(InputAction.class);
+    private final Map<InputAction, Boolean> previousActionStates = new EnumMap<>(InputAction.class);
+    private final EnumSet<InputAction> pressedThisFrame = EnumSet.noneOf(InputAction.class);
+    private final EnumSet<InputAction> releasedThisFrame = EnumSet.noneOf(InputAction.class);
 
     // Mouse state
-    private boolean leftMousePressed = false;
-    private boolean rightMousePressed = false;
-    private boolean middleMousePressed = false;
+    private double mouseX, mouseY;
+    private double previousMouseX, previousMouseY;
+    private double mouseDeltaX, mouseDeltaY;
+    private boolean[] mouseButtons = new boolean[8];
+    private boolean[] previousMouseButtons = new boolean[8];
     private double scrollOffset = 0;
 
-    // Movement modifiers
+    // Input settings
+    private boolean mouseLocked = true;
+    private boolean inputEnabled = true;
+    private float mouseSensitivity = 1.0f;
+    private float movementSpeed = 1.0f;
+
+    // Movement state
+    private Vector3f inputVector = new Vector3f();
     private boolean sprintMode = false;
     private boolean walkMode = false;
     private boolean crouchMode = false;
 
-    // Camera modes
-    private boolean freeCameraMode = true;
-    private boolean mouseLocked = true;
-
-    // Debug info
+    // Debug and UI state
     private boolean showDebugInfo = false;
     private boolean wireframeMode = false;
+    private boolean freeCameraMode = true;
+
+    // Input smoothing
+    private final InputSmoother inputSmoother = new InputSmoother();
+
+    // Key bindings
+    private final Map<Integer, InputAction> keyBindings = new HashMap<>();
 
     public InputHandler(long window, Camera camera) {
         this.window = window;
         this.camera = camera;
+
+        initializeActionStates();
+        setupDefaultKeyBindings();
         setupCallbacks();
+
+        // Lock mouse initially
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+
+    private void initializeActionStates() {
+        for (InputAction action : InputAction.values()) {
+            actionStates.put(action, false);
+            previousActionStates.put(action, false);
+        }
+    }
+
+    private void setupDefaultKeyBindings() {
+        // Movement
+        keyBindings.put(GLFW_KEY_W, InputAction.MOVE_FORWARD);
+        keyBindings.put(GLFW_KEY_S, InputAction.MOVE_BACKWARD);
+        keyBindings.put(GLFW_KEY_A, InputAction.MOVE_LEFT);
+        keyBindings.put(GLFW_KEY_D, InputAction.MOVE_RIGHT);
+        keyBindings.put(GLFW_KEY_SPACE, InputAction.MOVE_UP);
+        keyBindings.put(GLFW_KEY_LEFT_SHIFT, InputAction.MOVE_DOWN);
+        keyBindings.put(GLFW_KEY_LEFT_CONTROL, InputAction.CROUCH);
+
+        // Arrow keys for fine movement
+        keyBindings.put(GLFW_KEY_UP, InputAction.MOVE_FORWARD_SLOW);
+        keyBindings.put(GLFW_KEY_DOWN, InputAction.MOVE_BACKWARD_SLOW);
+        keyBindings.put(GLFW_KEY_LEFT, InputAction.MOVE_LEFT_SLOW);
+        keyBindings.put(GLFW_KEY_RIGHT, InputAction.MOVE_RIGHT_SLOW);
+
+        // Modifiers
+        keyBindings.put(GLFW_KEY_LEFT_ALT, InputAction.WALK);
+
+        // Camera controls
+        keyBindings.put(GLFW_KEY_R, InputAction.RESET_CAMERA);
+        keyBindings.put(GLFW_KEY_T, InputAction.TELEPORT_RANDOM);
+        keyBindings.put(GLFW_KEY_G, InputAction.TOGGLE_GRAVITY);
+
+        // Debug and settings
+        keyBindings.put(GLFW_KEY_F1, InputAction.TOGGLE_DEBUG);
+        keyBindings.put(GLFW_KEY_F2, InputAction.TOGGLE_WIREFRAME);
+        keyBindings.put(GLFW_KEY_F3, InputAction.TOGGLE_CAMERA_MODE);
+        keyBindings.put(GLFW_KEY_F4, InputAction.CAMERA_SHAKE_TEST);
+        keyBindings.put(GLFW_KEY_F11, InputAction.TOGGLE_FULLSCREEN);
+
+        // Preset positions
+        keyBindings.put(GLFW_KEY_1, InputAction.PRESET_POSITION_1);
+        keyBindings.put(GLFW_KEY_2, InputAction.PRESET_POSITION_2);
+        keyBindings.put(GLFW_KEY_3, InputAction.PRESET_POSITION_3);
+        keyBindings.put(GLFW_KEY_4, InputAction.PRESET_POSITION_4);
+        keyBindings.put(GLFW_KEY_5, InputAction.PRESET_POSITION_5);
+
+        // FOV and sensitivity
+        keyBindings.put(GLFW_KEY_EQUAL, InputAction.INCREASE_FOV);
+        keyBindings.put(GLFW_KEY_MINUS, InputAction.DECREASE_FOV);
+        keyBindings.put(GLFW_KEY_KP_ADD, InputAction.INCREASE_SENSITIVITY);
+        keyBindings.put(GLFW_KEY_KP_SUBTRACT, InputAction.DECREASE_SENSITIVITY);
+
+        // Application control
+        keyBindings.put(GLFW_KEY_ESCAPE, InputAction.TOGGLE_MOUSE_LOCK);
     }
 
     private void setupCallbacks() {
-        // Mouse button callback
-        glfwSetMouseButtonCallback(window, (window, button, action, mods) -> {
-            if (button == GLFW_MOUSE_BUTTON_LEFT) {
-                leftMousePressed = (action == GLFW_PRESS);
-            } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-                rightMousePressed = (action == GLFW_PRESS);
-            } else if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-                middleMousePressed = (action == GLFW_PRESS);
+        // Key callback
+        glfwSetKeyCallback(window, (window, key, scancode, action, mods) -> {
+            if (!inputEnabled) return;
+
+            InputAction inputAction = keyBindings.get(key);
+            if (inputAction != null) {
+                boolean pressed = action == GLFW_PRESS || action == GLFW_REPEAT;
+                setActionState(inputAction, pressed);
+
+                if (action == GLFW_PRESS) {
+                    handleKeyPress(inputAction, mods);
+                }
             }
         });
 
-        // Scroll callback for zoom
+        // Mouse button callback
+        glfwSetMouseButtonCallback(window, (window, button, action, mods) -> {
+            if (!inputEnabled || button >= mouseButtons.length) return;
+
+            mouseButtons[button] = (action == GLFW_PRESS);
+
+            if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+                handleMousePicking();
+            }
+        });
+
+        // Scroll callback
         glfwSetScrollCallback(window, (window, xoffset, yoffset) -> {
+            if (!inputEnabled) return;
+
             scrollOffset = yoffset;
             camera.zoom((float) yoffset * 2.0f);
         });
 
-        // Key callback for toggle actions
-        glfwSetKeyCallback(window, (window, key, scancode, action, mods) -> {
-            if (action == GLFW_PRESS) {
-                handleKeyPress(key, mods);
+        // Cursor position callback
+        glfwSetCursorPosCallback(window, (window, xpos, ypos) -> {
+            if (!inputEnabled) return;
+
+            mouseX = xpos;
+            mouseY = ypos;
+
+            if (mouseLocked) {
+                mouseDeltaX = mouseX - previousMouseX;
+                mouseDeltaY = mouseY - previousMouseY;
+
+                // Apply sensitivity and smoothing
+                mouseDeltaX *= mouseSensitivity;
+                mouseDeltaY *= mouseSensitivity;
+
+                camera.processMouse(mouseX, mouseY);
+            }
+
+            previousMouseX = mouseX;
+            previousMouseY = mouseY;
+        });
+
+        // Window focus callback
+        glfwSetWindowFocusCallback(window, (window, focused) -> {
+            if (!focused && mouseLocked) {
+                toggleMouseLock();
             }
         });
     }
 
-    private void handleKeyPress(int key, int mods) {
-        switch (key) {
-            case GLFW_KEY_ESCAPE:
-                // Toggle mouse lock
-                toggleMouseLock();
-                break;
-
-            case GLFW_KEY_F1:
-                showDebugInfo = !showDebugInfo;
-                break;
-
-            case GLFW_KEY_F2:
-                wireframeMode = !wireframeMode;
-                break;
-
-            case GLFW_KEY_F3:
-                // Toggle camera mode
-                camera.setFlying(!camera.isFlying());
-                break;
-
-            case GLFW_KEY_F4:
-                // Camera shake test
-                camera.shake(0.5f, 1.0f);
-                break;
-
-            case GLFW_KEY_R:
-                // Reset camera position
-                camera.setPosition(new Vector3f(0, 10, 3));
-                break;
-
-            case GLFW_KEY_T:
-                // Teleport to random location
-                float x = (float) (Math.random() - 0.5) * 100;
-                float z = (float) (Math.random() - 0.5) * 100;
-                camera.setPosition(new Vector3f(x, 20, z));
-                break;
-
-            case GLFW_KEY_G:
-                // Toggle gravity/flying mode
-                freeCameraMode = !freeCameraMode;
-                camera.setFlying(freeCameraMode);
-                break;
-        }
-    }
-
     public void processInput(float deltaTime) {
-        // Store previous key states
-        System.arraycopy(keyStates, 0, previousKeyStates, 0, keyStates.length);
+        if (!inputEnabled) return;
 
-        // Update current key states - FIXED
-        updateKeyStates();
-
-        // Process movement modifiers
-        processMovementModifiers();
-
-        // Process camera movement
-        processCameraMovement(deltaTime);
-
-        // Process special actions
+        updateInputStates();
+        processMovement(deltaTime);
         processSpecialActions(deltaTime);
+        inputSmoother.update(deltaTime);
 
-        // Reset scroll offset after processing
+        // Reset per-frame data
         scrollOffset = 0;
+        mouseDeltaX = 0;
+        mouseDeltaY = 0;
+        pressedThisFrame.clear();
+        releasedThisFrame.clear();
     }
 
-    // FIXED: Safe key state updates with proper bounds checking
-    private void updateKeyStates() {
-        // Only check keys in valid range
-        for (int key = MIN_KEY; key <= MAX_KEY; key++) {
-            int index = key - MIN_KEY;
-            if (index >= 0 && index < keyStates.length) {
-                try {
-                    keyStates[index] = glfwGetKey(window, key) == GLFW_PRESS;
-                } catch (Exception e) {
-                    // Skip invalid keys
-                    keyStates[index] = false;
-                }
+    private void updateInputStates() {
+        // Store previous states
+        for (InputAction action : InputAction.values()) {
+            previousActionStates.put(action, actionStates.get(action));
+        }
+
+        System.arraycopy(mouseButtons, 0, previousMouseButtons, 0, mouseButtons.length);
+
+        // Update current states by polling
+        for (Map.Entry<Integer, InputAction> entry : keyBindings.entrySet()) {
+            boolean pressed = glfwGetKey(window, entry.getKey()) == GLFW_PRESS;
+            setActionState(entry.getValue(), pressed);
+        }
+
+        // Update mouse buttons
+        for (int i = 0; i < mouseButtons.length; i++) {
+            mouseButtons[i] = glfwGetMouseButton(window, i) == GLFW_PRESS;
+        }
+
+        // Detect pressed/released this frame
+        for (InputAction action : InputAction.values()) {
+            boolean current = actionStates.get(action);
+            boolean previous = previousActionStates.get(action);
+
+            if (current && !previous) {
+                pressedThisFrame.add(action);
+            } else if (!current && previous) {
+                releasedThisFrame.add(action);
             }
         }
     }
 
-    // FIXED: Helper method to safely check key state
-    private boolean isKeyPressed(int key) {
-        if (key < MIN_KEY || key > MAX_KEY) {
-            return false;
-        }
-        int index = key - MIN_KEY;
-        return index >= 0 && index < keyStates.length && keyStates[index];
+    private void setActionState(InputAction action, boolean state) {
+        actionStates.put(action, state);
     }
 
-    // FIXED: Helper method to safely check if key was just pressed
-    private boolean wasKeyPressed(int key) {
-        if (key < MIN_KEY || key > MAX_KEY) {
-            return false;
+    private void processMovement(float deltaTime) {
+        // Reset input vector
+        inputVector.zero();
+
+        // Process movement inputs
+        if (isActionActive(InputAction.MOVE_FORWARD) || isActionActive(InputAction.MOVE_FORWARD_SLOW)) {
+            inputVector.z -= 1.0f;
         }
-        int index = key - MIN_KEY;
-        return index >= 0 && index < keyStates.length &&
-                keyStates[index] && !previousKeyStates[index];
-    }
-
-    // FIXED: Helper method to safely check if key was just released
-    private boolean wasKeyReleased(int key) {
-        if (key < MIN_KEY || key > MAX_KEY) {
-            return false;
+        if (isActionActive(InputAction.MOVE_BACKWARD) || isActionActive(InputAction.MOVE_BACKWARD_SLOW)) {
+            inputVector.z += 1.0f;
         }
-        int index = key - MIN_KEY;
-        return index >= 0 && index < keyStates.length &&
-                !keyStates[index] && previousKeyStates[index];
-    }
-
-    private void processMovementModifiers() {
-        // Sprint mode (Left Shift)
-        sprintMode = isKeyPressed(GLFW_KEY_LEFT_SHIFT);
-
-        // Walk mode (Left Alt for slower movement)
-        walkMode = isKeyPressed(GLFW_KEY_LEFT_ALT);
-
-        // Crouch mode (Left Control)
-        crouchMode = isKeyPressed(GLFW_KEY_LEFT_CONTROL);
-    }
-
-    private void processCameraMovement(float deltaTime) {
-        boolean isMoving = false;
-
-        // WASD movement - FIXED using safe key checking
-        if (isKeyPressed(GLFW_KEY_W)) {
-            camera.moveForward(deltaTime, sprintMode && !walkMode);
-            isMoving = true;
+        if (isActionActive(InputAction.MOVE_LEFT) || isActionActive(InputAction.MOVE_LEFT_SLOW)) {
+            inputVector.x -= 1.0f;
         }
-        if (isKeyPressed(GLFW_KEY_S)) {
-            camera.moveBackward(deltaTime, sprintMode && !walkMode);
-            isMoving = true;
+        if (isActionActive(InputAction.MOVE_RIGHT) || isActionActive(InputAction.MOVE_RIGHT_SLOW)) {
+            inputVector.x += 1.0f;
         }
-        if (isKeyPressed(GLFW_KEY_A)) {
-            camera.moveLeft(deltaTime, sprintMode && !walkMode);
-            isMoving = true;
+
+        // Normalize diagonal movement
+        if (inputVector.length() > 0) {
+            inputVector.normalize();
         }
-        if (isKeyPressed(GLFW_KEY_D)) {
-            camera.moveRight(deltaTime, sprintMode && !walkMode);
-            isMoving = true;
+
+        // Apply movement modifiers
+        sprintMode = isActionActive(InputAction.MOVE_DOWN) && camera.isFlying();
+        walkMode = isActionActive(InputAction.WALK);
+        crouchMode = isActionActive(InputAction.CROUCH);
+
+        // Calculate movement speed
+        float speed = movementSpeed;
+        if (walkMode || isSlowMovement()) {
+            speed *= 0.3f;
+        }
+        if (sprintMode && !walkMode) {
+            speed *= 2.5f;
+        }
+
+        // Apply smooth movement
+        Vector3f smoothedInput = inputSmoother.smoothInput(inputVector, deltaTime);
+
+        // Send movement to camera
+        if (smoothedInput.z < 0) {
+            camera.moveForward(deltaTime * Math.abs(smoothedInput.z), sprintMode && !walkMode);
+        } else if (smoothedInput.z > 0) {
+            camera.moveBackward(deltaTime * smoothedInput.z, sprintMode && !walkMode);
+        }
+
+        if (smoothedInput.x < 0) {
+            camera.moveLeft(deltaTime * Math.abs(smoothedInput.x), sprintMode && !walkMode);
+        } else if (smoothedInput.x > 0) {
+            camera.moveRight(deltaTime * smoothedInput.x, sprintMode && !walkMode);
         }
 
         // Vertical movement
-        if (isKeyPressed(GLFW_KEY_SPACE)) {
+        if (isActionActive(InputAction.MOVE_UP)) {
             camera.moveUp(deltaTime);
-            isMoving = true;
         }
-        if (isKeyPressed(GLFW_KEY_LEFT_SHIFT) && camera.isFlying()) {
+        if (isActionActive(InputAction.MOVE_DOWN) && camera.isFlying()) {
             camera.moveDown(deltaTime);
-            isMoving = true;
         }
 
-        // Arrow keys for fine movement
-        if (isKeyPressed(GLFW_KEY_UP)) {
-            camera.moveForward(deltaTime * 0.3f, false);
-            isMoving = true;
-        }
-        if (isKeyPressed(GLFW_KEY_DOWN)) {
-            camera.moveBackward(deltaTime * 0.3f, false);
-            isMoving = true;
-        }
-        if (isKeyPressed(GLFW_KEY_LEFT)) {
-            camera.moveLeft(deltaTime * 0.3f, false);
-            isMoving = true;
-        }
-        if (isKeyPressed(GLFW_KEY_RIGHT)) {
-            camera.moveRight(deltaTime * 0.3f, false);
-            isMoving = true;
-        }
-
-        // Stop movement if no keys pressed
-        if (!isMoving) {
+        // Stop movement if no input
+        if (inputVector.length() == 0) {
             camera.stopMovement();
-        }
-
-        // Apply movement speed modifiers
-        if (walkMode) {
-            camera.setSpeed(3.0f); // Slower walk speed
-        } else {
-            camera.setSpeed(8.0f); // Normal speed
         }
     }
 
+    private boolean isSlowMovement() {
+        return isActionActive(InputAction.MOVE_FORWARD_SLOW) ||
+                isActionActive(InputAction.MOVE_BACKWARD_SLOW) ||
+                isActionActive(InputAction.MOVE_LEFT_SLOW) ||
+                isActionActive(InputAction.MOVE_RIGHT_SLOW);
+    }
+
     private void processSpecialActions(float deltaTime) {
-        // Number keys for preset positions
-        if (wasKeyPressed(GLFW_KEY_1)) {
-            camera.setPosition(new Vector3f(0, 20, 0)); // Origin overview
-        }
-        if (wasKeyPressed(GLFW_KEY_2)) {
-            camera.setPosition(new Vector3f(50, 30, 50)); // Corner view
-        }
-        if (wasKeyPressed(GLFW_KEY_3)) {
-            camera.setPosition(new Vector3f(0, 100, 0)); // High overview
-        }
-
-        // Camera sensitivity adjustment
-        if (isKeyPressed(GLFW_KEY_KP_ADD)) {
-            camera.setSensitivity(camera.getSensitivity() + 0.01f);
-        }
-        if (isKeyPressed(GLFW_KEY_KP_SUBTRACT)) {
-            camera.setSensitivity(Math.max(0.01f, camera.getSensitivity() - 0.01f));
-        }
-
         // FOV adjustment
-        if (isKeyPressed(GLFW_KEY_EQUAL)) {
-            camera.setFov(Math.min(120.0f, camera.getFov() + 30.0f * deltaTime));
+        if (isActionActive(InputAction.INCREASE_FOV)) {
+            camera.setFov(Math.min(120.0f, camera.getFov() + 60.0f * deltaTime));
         }
-        if (isKeyPressed(GLFW_KEY_MINUS)) {
-            camera.setFov(Math.max(10.0f, camera.getFov() - 30.0f * deltaTime));
+        if (isActionActive(InputAction.DECREASE_FOV)) {
+            camera.setFov(Math.max(10.0f, camera.getFov() - 60.0f * deltaTime));
         }
 
-        // Mouse picking (when left mouse is clicked)
-        if (leftMousePressed) {
-            handleMousePicking();
+        // Sensitivity adjustment
+        if (isActionActive(InputAction.INCREASE_SENSITIVITY)) {
+            camera.setSensitivity(Math.min(2.0f, camera.getSensitivity() + 1.0f * deltaTime));
+        }
+        if (isActionActive(InputAction.DECREASE_SENSITIVITY)) {
+            camera.setSensitivity(Math.max(0.01f, camera.getSensitivity() - 1.0f * deltaTime));
+        }
+    }
+
+    private void handleKeyPress(InputAction action, int mods) {
+        switch (action) {
+            case TOGGLE_MOUSE_LOCK:
+                toggleMouseLock();
+                break;
+
+            case TOGGLE_DEBUG:
+                showDebugInfo = !showDebugInfo;
+                break;
+
+            case TOGGLE_WIREFRAME:
+                wireframeMode = !wireframeMode;
+                break;
+
+            case TOGGLE_CAMERA_MODE:
+                camera.setFlying(!camera.isFlying());
+                break;
+
+            case CAMERA_SHAKE_TEST:
+                camera.shake(0.5f, 1.0f);
+                break;
+
+            case RESET_CAMERA:
+                camera.setPosition(new Vector3f(0, 10, 3));
+                break;
+
+            case TELEPORT_RANDOM:
+                float x = (float) (Math.random() - 0.5) * 200;
+                float z = (float) (Math.random() - 0.5) * 200;
+                camera.setPosition(new Vector3f(x, 30, z));
+                break;
+
+            case TOGGLE_GRAVITY:
+                freeCameraMode = !freeCameraMode;
+                camera.setFlying(freeCameraMode);
+                break;
+
+            case PRESET_POSITION_1:
+                camera.setPosition(new Vector3f(0, 20, 0));
+                break;
+            case PRESET_POSITION_2:
+                camera.setPosition(new Vector3f(50, 30, 50));
+                break;
+            case PRESET_POSITION_3:
+                camera.setPosition(new Vector3f(0, 100, 0));
+                break;
+            case PRESET_POSITION_4:
+                camera.setPosition(new Vector3f(-50, 25, -50));
+                break;
+            case PRESET_POSITION_5:
+                camera.setPosition(new Vector3f(100, 40, 0));
+                break;
+
+            default:
+                break;
         }
     }
 
     private void handleMousePicking() {
         try {
-            // Get mouse position
             double[] xpos = new double[1];
             double[] ypos = new double[1];
             glfwGetCursorPos(window, xpos, ypos);
 
-            // Get window size
             int[] width = new int[1];
             int[] height = new int[1];
             glfwGetWindowSize(window, width, height);
 
-            // Calculate mouse ray
-            Vector3f mouseRay = camera.getMouseRay((float) xpos[0], (float) ypos[0], width[0], height[0]);
+            Vector3f mouseRay = camera.getMouseRay(
+                    (float) xpos[0],
+                    (float) ypos[0],
+                    width[0],
+                    height[0]
+            );
 
-            // Perform ray casting (would need terrain collision detection)
+            // Perform ray casting
             performRayCast(camera.getPosition(), mouseRay);
         } catch (Exception e) {
             System.err.println("Error in mouse picking: " + e.getMessage());
@@ -322,68 +423,29 @@ public class InputHandler {
         }
     }
 
-    // Handle window focus events
-    public void onWindowFocus(boolean focused) {
-        if (!focused) {
-            // Release mouse when window loses focus
-            mouseLocked = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
+    // Query methods
+    public boolean isActionActive(InputAction action) {
+        return actionStates.getOrDefault(action, false);
     }
 
-    // Get input state for UI/debug display
-    public String getInputDebugInfo() {
-        StringBuilder info = new StringBuilder();
-        info.append("=== INPUT DEBUG ===\n");
-        info.append("Mouse Locked: ").append(mouseLocked).append("\n");
-        info.append("Sprint Mode: ").append(sprintMode).append("\n");
-        info.append("Walk Mode: ").append(walkMode).append("\n");
-        info.append("Crouch Mode: ").append(crouchMode).append("\n");
-        info.append("Flying Mode: ").append(camera.isFlying()).append("\n");
-        info.append("Grounded: ").append(camera.isGrounded()).append("\n");
-        info.append("Camera FOV: ").append(String.format("%.1f", camera.getFov())).append("\n");
-        info.append("Sensitivity: ").append(String.format("%.3f", camera.getSensitivity())).append("\n");
-
-        Vector3f pos = camera.getPosition();
-        info.append("Position: ").append(String.format("%.1f, %.1f, %.1f", pos.x, pos.y, pos.z)).append("\n");
-
-        Vector3f vel = camera.getVelocity();
-        info.append("Velocity: ").append(String.format("%.1f", vel.length())).append("\n");
-
-        info.append("Pitch: ").append(String.format("%.1f", camera.getPitch())).append("\n");
-        info.append("Yaw: ").append(String.format("%.1f", camera.getYaw())).append("\n");
-
-        return info.toString();
+    public boolean wasActionPressed(InputAction action) {
+        return pressedThisFrame.contains(action);
     }
 
-    public String getControlsHelp() {
-        return """
-                === CONTROLS ===
-                WASD - Move
-                Mouse - Look around
-                Space - Up/Jump
-                Shift - Sprint/Down (flying)
-                Alt - Walk slower
-                Ctrl - Crouch
-                
-                Arrow Keys - Fine movement
-                1,2,3 - Preset positions
-                R - Reset position
-                T - Random teleport
-                G - Toggle flying/gravity
-                F1 - Toggle debug info
-                F2 - Toggle wireframe
-                F3 - Toggle camera mode
-                F4 - Test camera shake
-                
-                +/- - Adjust FOV
-                Numpad +/- - Adjust sensitivity
-                
-                ESC - Toggle mouse lock
-                """;
+    public boolean wasActionReleased(InputAction action) {
+        return releasedThisFrame.contains(action);
     }
 
-    // Getters for external systems
+    public boolean isMouseButtonPressed(int button) {
+        return button >= 0 && button < mouseButtons.length && mouseButtons[button];
+    }
+
+    public boolean wasMouseButtonPressed(int button) {
+        return button >= 0 && button < mouseButtons.length &&
+                mouseButtons[button] && !previousMouseButtons[button];
+    }
+
+    // Getters and setters
     public boolean isShowDebugInfo() {
         return showDebugInfo;
     }
@@ -396,28 +458,280 @@ public class InputHandler {
         return mouseLocked;
     }
 
-    public boolean isLeftMousePressed() {
-        return leftMousePressed;
+    public boolean isInputEnabled() {
+        return inputEnabled;
     }
 
-    public boolean isRightMousePressed() {
-        return rightMousePressed;
+    public float getMouseSensitivity() {
+        return mouseSensitivity;
     }
 
-    public boolean isMiddleMousePressed() {
-        return middleMousePressed;
+    public float getMovementSpeed() {
+        return movementSpeed;
     }
 
     public double getScrollOffset() {
         return scrollOffset;
     }
 
-    // Setters
+    public Vector3f getInputVector() {
+        return new Vector3f(inputVector);
+    }
+
     public void setShowDebugInfo(boolean show) {
         this.showDebugInfo = show;
     }
 
     public void setWireframeMode(boolean wireframe) {
         this.wireframeMode = wireframe;
+    }
+
+    public void setInputEnabled(boolean enabled) {
+        this.inputEnabled = enabled;
+    }
+
+    public void setMouseSensitivity(float sensitivity) {
+        this.mouseSensitivity = Math.max(0.1f, sensitivity);
+    }
+
+    public void setMovementSpeed(float speed) {
+        this.movementSpeed = Math.max(0.1f, speed);
+    }
+
+    /**
+     * Get debug information about input state
+     */
+    public String getInputDebugInfo() {
+        StringBuilder info = new StringBuilder();
+        info.append("=== INPUT DEBUG ===\n");
+        info.append("Mouse Locked: ").append(mouseLocked).append("\n");
+        info.append("Input Enabled: ").append(inputEnabled).append("\n");
+        info.append("Sprint Mode: ").append(sprintMode).append("\n");
+        info.append("Walk Mode: ").append(walkMode).append("\n");
+        info.append("Crouch Mode: ").append(crouchMode).append("\n");
+        info.append("Flying Mode: ").append(camera.isFlying()).append("\n");
+        info.append("Grounded: ").append(camera.isGrounded()).append("\n");
+        info.append("Mouse Sensitivity: ").append(String.format("%.3f", mouseSensitivity)).append("\n");
+        info.append("Movement Speed: ").append(String.format("%.3f", movementSpeed)).append("\n");
+        info.append("Input Vector: ").append(String.format("%.2f, %.2f, %.2f",
+                inputVector.x, inputVector.y, inputVector.z)).append("\n");
+
+        Vector3f pos = camera.getPosition();
+        info.append("Position: ").append(String.format("%.1f, %.1f, %.1f", pos.x, pos.y, pos.z)).append("\n");
+
+        Vector3f vel = camera.getVelocity();
+        info.append("Velocity: ").append(String.format("%.2f", vel.length())).append("\n");
+
+        return info.toString();
+    }
+
+    /**
+     * Get help text for controls
+     */
+    public String getControlsHelp() {
+        return """
+                === ENHANCED CONTROLS ===
+                MOVEMENT:
+                  WASD - Move (hold Shift for sprint, Alt for walk)
+                  Mouse - Look around
+                  Space - Up/Jump
+                  Left Shift - Sprint (when moving) / Down (when flying)
+                  Left Alt - Walk slower
+                  Left Ctrl - Crouch
+                  Arrow Keys - Fine movement
+                
+                CAMERA:
+                  R - Reset position
+                  T - Random teleport
+                  G - Toggle flying/gravity mode
+                  F3 - Toggle camera mode
+                  F4 - Test camera shake
+                  1-5 - Preset positions
+                
+                VIEW:
+                  +/- - Adjust FOV
+                  Numpad +/- - Adjust mouse sensitivity
+                  F1 - Toggle debug info
+                  F2 - Toggle wireframe mode
+                  F11 - Toggle fullscreen
+                
+                SYSTEM:
+                  ESC - Toggle mouse lock
+                  Left Mouse - Ray cast / Interact
+                  Mouse Wheel - Zoom
+                
+                TIPS:
+                - Use smooth movement for precise control
+                - Combine modifiers for different movement speeds
+                - Check debug info (F1) for performance metrics
+                """;
+    }
+
+    /**
+     * Bind a key to an action
+     */
+    public void bindKey(int key, InputAction action) {
+        keyBindings.put(key, action);
+    }
+
+    /**
+     * Remove a key binding
+     */
+    public void unbindKey(int key) {
+        keyBindings.remove(key);
+    }
+
+    /**
+     * Get current key binding for an action
+     */
+    public Integer getKeyForAction(InputAction action) {
+        for (Map.Entry<Integer, InputAction> entry : keyBindings.entrySet()) {
+            if (entry.getValue() == action) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Handle window focus events
+     */
+    public void onWindowFocus(boolean focused) {
+        if (!focused) {
+            // Release mouse lock when window loses focus for better UX
+            if (mouseLocked) {
+                mouseLocked = false;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+
+            // Clear all input states when losing focus to prevent stuck keys
+            for (InputAction action : InputAction.values()) {
+                actionStates.put(action, false);
+            }
+
+            // Clear mouse button states
+            for (int i = 0; i < mouseButtons.length; i++) {
+                mouseButtons[i] = false;
+            }
+
+            // Reset input vector
+            inputVector.zero();
+            inputSmoother.reset();
+
+            // Stop camera movement
+            camera.stopMovement();
+        }
+        // Note: We don't automatically re-lock the mouse when gaining focus
+        // to avoid surprising the user - they need to press ESC to re-lock
+    }
+
+    /**
+     * Input action enumeration
+     */
+    public enum InputAction {
+        // Movement
+        MOVE_FORWARD,
+        MOVE_BACKWARD,
+        MOVE_LEFT,
+        MOVE_RIGHT,
+        MOVE_UP,
+        MOVE_DOWN,
+        MOVE_FORWARD_SLOW,
+        MOVE_BACKWARD_SLOW,
+        MOVE_LEFT_SLOW,
+        MOVE_RIGHT_SLOW,
+
+        // Movement modifiers
+        WALK,
+        CROUCH,
+
+        // Camera
+        RESET_CAMERA,
+        TELEPORT_RANDOM,
+        TOGGLE_GRAVITY,
+        TOGGLE_CAMERA_MODE,
+        CAMERA_SHAKE_TEST,
+
+        // Preset positions
+        PRESET_POSITION_1,
+        PRESET_POSITION_2,
+        PRESET_POSITION_3,
+        PRESET_POSITION_4,
+        PRESET_POSITION_5,
+
+        // View adjustments
+        INCREASE_FOV,
+        DECREASE_FOV,
+        INCREASE_SENSITIVITY,
+        DECREASE_SENSITIVITY,
+
+        // Debug and display
+        TOGGLE_DEBUG,
+        TOGGLE_WIREFRAME,
+        TOGGLE_FULLSCREEN,
+
+        // System
+        TOGGLE_MOUSE_LOCK,
+        EXIT_APPLICATION
+    }
+
+    /**
+     * Input smoothing utility for better movement feel
+     */
+    private static class InputSmoother {
+        private Vector3f smoothedInput = new Vector3f();
+        private Vector3f inputVelocity = new Vector3f();
+        private final float smoothTime = 0.1f;
+        private final float maxSpeed = 10.0f;
+
+        public void update(float deltaTime) {
+            // Update method called each frame for any time-based smoothing
+            // Currently just maintains the smoothing state
+            // Could be extended for more complex smoothing behaviors
+        }
+
+        public Vector3f smoothInput(Vector3f targetInput, float deltaTime) {
+            // Smooth the input using a damped spring
+            smoothVector3f(smoothedInput, targetInput, inputVelocity, smoothTime, maxSpeed, deltaTime);
+            return new Vector3f(smoothedInput);
+        }
+
+        private void smoothVector3f(Vector3f current, Vector3f target, Vector3f velocity,
+                                    float smoothTime, float maxSpeed, float deltaTime) {
+            float omega = 2.0f / smoothTime;
+            float x = omega * deltaTime;
+            float exp = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
+
+            Vector3f change = new Vector3f(current).sub(target);
+            Vector3f originalTo = new Vector3f(target);
+
+            float maxChange = maxSpeed * smoothTime;
+            if (change.length() > maxChange) {
+                change.normalize().mul(maxChange);
+            }
+
+            target.set(current).sub(change);
+
+            Vector3f temp = new Vector3f(velocity).add(new Vector3f(change).mul(omega)).mul(deltaTime);
+            velocity.set(velocity.sub(new Vector3f(change).mul(omega * deltaTime))).mul(exp);
+
+            Vector3f result = new Vector3f(target).add(new Vector3f(change).add(temp).mul(exp));
+
+            // Prevent overshooting
+            Vector3f origMinusCurrent = new Vector3f(originalTo).sub(current);
+            Vector3f resultMinusOrig = new Vector3f(result).sub(originalTo);
+
+            if (origMinusCurrent.dot(resultMinusOrig) > 0) {
+                result.set(originalTo);
+                velocity.zero();
+            }
+
+            current.set(result);
+        }
+
+        public void reset() {
+            smoothedInput.zero();
+            inputVelocity.zero();
+        }
     }
 }

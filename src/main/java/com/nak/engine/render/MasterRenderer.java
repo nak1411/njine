@@ -3,6 +3,7 @@ package com.nak.engine.render;
 import com.nak.engine.entity.Camera;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 
@@ -14,687 +15,608 @@ import static org.lwjgl.opengl.GL11.*;
 
 public class MasterRenderer {
 
-    private FloatBuffer materialBuffer;
-    private TerrainManager terrainManager;
-    private AtmosphericEffects atmosphericEffects;
-    private ParticleSystem particleSystem;
-    private SkyRenderer skyRenderer;
-    private List<Vector3f> cloudPositions;
+    // Rendering components
+    private final TerrainManager terrainManager;
+    private final AtmosphericRenderer atmosphericRenderer;
+    private final ParticleRenderer particleRenderer;
+    private final SkyRenderer skyRenderer;
+    private final PostProcessor postProcessor;
+    private final UIRenderer uiRenderer;
+
+    // Buffers and matrices
+    private final FloatBuffer matrixBuffer;
+    private final Matrix4f projectionMatrix;
+    private final Matrix4f viewMatrix;
+    private final Matrix4f modelMatrix;
+
+    // Lighting system
+    private final LightingSystem lightingSystem;
     private float dayNightCycle = 0.0f;
+    private final Vector3f sunDirection = new Vector3f();
+    private final Vector3f sunColor = new Vector3f();
+    private final Vector3f ambientColor = new Vector3f();
+
+    // Rendering settings
+    private boolean wireframeEnabled = false;
+    private boolean debugRenderingEnabled = false;
+    private float fogDensity = 0.008f;
+    private final Vector3f fogColor = new Vector3f(0.5f, 0.6f, 0.7f);
+
+    // Performance tracking
+    private int trianglesRendered = 0;
+    private int drawCalls = 0;
+    private long renderTimeNanos = 0;
+    private final RenderStats renderStats = new RenderStats();
+
+    // Animated objects
+    private final List<AnimatedObject> animatedObjects;
+    private final ObjectRenderer objectRenderer;
 
     public MasterRenderer(TerrainManager terrainManager) {
         this.terrainManager = terrainManager;
-        this.atmosphericEffects = new AtmosphericEffects();
-        this.particleSystem = new ParticleSystem();
+
+        // Initialize rendering components
+        this.atmosphericRenderer = new AtmosphericRenderer();
+        this.particleRenderer = new ParticleRenderer();
         this.skyRenderer = new SkyRenderer();
-        this.materialBuffer = BufferUtils.createFloatBuffer(4);
-        initializeClouds();
+        this.postProcessor = new PostProcessor();
+        this.uiRenderer = new UIRenderer();
+        this.objectRenderer = new ObjectRenderer();
+
+        // Initialize matrices and buffers
+        this.matrixBuffer = BufferUtils.createFloatBuffer(16);
+        this.projectionMatrix = new Matrix4f();
+        this.viewMatrix = new Matrix4f();
+        this.modelMatrix = new Matrix4f();
+
+        // Initialize lighting
+        this.lightingSystem = new LightingSystem();
+
+        // Initialize animated objects
+        this.animatedObjects = new ArrayList<>();
+        initializeAnimatedObjects();
+
+        // Configure OpenGL state
+        setupOpenGLState();
     }
 
-    private void initializeClouds() {
-        cloudPositions = new ArrayList<>();
-        for (int i = 0; i < 20; i++) {
-            cloudPositions.add(new Vector3f(
-                    (float) (Math.random() - 0.5) * 200,
-                    20 + (float) Math.random() * 15,
-                    (float) (Math.random() - 0.5) * 200
-            ));
-        }
-    }
-
-    public void render(GameState gameState, Camera camera, float interpolation) {
-        // Update day/night cycle
-        dayNightCycle += 0.005f;
-        if (dayNightCycle > 2 * Math.PI) dayNightCycle -= 2 * Math.PI;
-
-        // Calculate sun position and lighting
-        Vector3f sunDirection = calculateSunDirection(dayNightCycle);
-        Vector3f sunColor = calculateSunColor(dayNightCycle);
-        Vector3f ambientColor = calculateAmbientColor(dayNightCycle);
-
-        // Set global lighting
-        setupLighting(sunDirection, sunColor, ambientColor);
-
-        // Render sky first
-        skyRenderer.render(camera, dayNightCycle, sunDirection);
-
-        // Enable depth testing for terrain and objects
+    private void setupOpenGLState() {
+        // Enable depth testing with optimizations
         glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(true);
 
-        // Render terrain with enhanced effects
-        renderEnhancedTerrainWithBuffers(camera, sunDirection, sunColor, ambientColor);
+        // Enable back-face culling
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glFrontFace(GL_CCW);
 
-        // Render atmospheric effects
-        atmosphericEffects.render(camera, sunDirection, sunColor);
+        // Enable blending for transparent objects
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        // Render clouds
-        renderClouds(camera, gameState.getTime());
+        // Configure fog
+        glEnable(GL_FOG);
+        glFogi(GL_FOG_MODE, GL_EXP2);
 
-        // Render particles (rain, snow, etc.)
-        particleSystem.update(gameState.getTime());
-        particleSystem.render(camera);
+        // Set clear color
+        glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+    }
 
-        // Render animated objects
-        renderAnimatedObjectsWithBuffers(gameState, sunColor, ambientColor);
+    private void initializeAnimatedObjects() {
+        // Create some animated objects for demonstration
+        for (int i = 0; i < 12; i++) {
+            AnimatedObject obj = new AnimatedObject();
+            obj.basePosition.set(
+                    (float) (Math.random() - 0.5) * 80,
+                    5.0f + (float) Math.random() * 10,
+                    (float) (Math.random() - 0.5) * 80
+            );
+            obj.animationSpeed = 0.5f + (float) Math.random() * 1.5f;
+            obj.animationOffset = (float) ((float) Math.random() * Math.PI * 2);
+            obj.color.set(
+                    0.3f + (float) Math.random() * 0.7f,
+                    0.3f + (float) Math.random() * 0.7f,
+                    0.3f + (float) Math.random() * 0.7f
+            );
+            animatedObjects.add(obj);
+        }
+    }
 
-        // Render UI elements
+    /**
+     * Main render method
+     */
+    public void render(GameState gameState, Camera camera, float interpolation) {
+        long startTime = System.nanoTime();
+
+        // Reset performance counters
+        trianglesRendered = 0;
+        drawCalls = 0;
+
+        // Update time-based effects
+        updateTimeBasedEffects(gameState.getTime());
+
+        // Update lighting system
+        lightingSystem.update(dayNightCycle, sunDirection, sunColor, ambientColor);
+
+        // Setup matrices
+        setupMatrices(camera);
+
+        // Begin frame
+        beginFrame();
+
+        // Render in order: sky -> terrain -> objects -> particles -> UI
+        renderSky(camera);
+        renderTerrain(camera);
+        renderAnimatedObjects(gameState);
+        renderParticles(camera, gameState.getTime());
+        renderAtmosphericEffects(camera);
+
+        // Post-processing
+        if (postProcessor.isEnabled()) {
+            postProcessor.process();
+        }
+
+        // Render UI overlay
         renderUI(camera, gameState);
+
+        // End frame
+        endFrame();
+
+        // Update performance metrics
+        renderTimeNanos = System.nanoTime() - startTime;
+        updateRenderStats();
     }
 
-    private Vector3f calculateSunDirection(float dayNightCycle) {
-        float x = (float) Math.cos(dayNightCycle) * 0.5f;
-        float y = (float) Math.sin(dayNightCycle);
-        float z = (float) Math.sin(dayNightCycle * 0.3f) * 0.2f;
-        return new Vector3f(x, y, z).normalize();
-    }
+    private void updateTimeBasedEffects(float time) {
+        // Update day/night cycle (24 minute cycle = 1440 seconds)
+        dayNightCycle += 0.001f;
+        if (dayNightCycle > 2 * Math.PI) {
+            dayNightCycle -= 2 * Math.PI;
+        }
 
-    private Vector3f calculateSunColor(float dayNightCycle) {
+        // Calculate sun position
         float sunHeight = (float) Math.sin(dayNightCycle);
+        sunDirection.set(
+                (float) Math.cos(dayNightCycle + Math.PI / 2) * 0.6f,
+                sunHeight,
+                (float) Math.sin(dayNightCycle + Math.PI / 2) * 0.3f
+        ).normalize();
+
+        // Calculate lighting colors
+        calculateLightingColors(sunHeight);
+
+        // Update fog based on time of day
+        updateFogSettings(sunHeight);
+    }
+
+    private void calculateLightingColors(float sunHeight) {
         if (sunHeight > 0) {
-            // Daytime - transition from orange to white to orange
+            // Daytime lighting
             float intensity = Math.min(1.0f, sunHeight * 2.0f);
-            return new Vector3f(1.0f, 0.9f + intensity * 0.1f, 0.7f + intensity * 0.3f);
+            sunColor.set(
+                    1.0f,
+                    0.95f + intensity * 0.05f,
+                    0.8f + intensity * 0.2f
+            );
+            ambientColor.set(
+                    0.3f + intensity * 0.3f,
+                    0.35f + intensity * 0.35f,
+                    0.5f + intensity * 0.3f
+            );
         } else {
-            // Nighttime - moon light
-            return new Vector3f(0.3f, 0.3f, 0.5f);
+            // Nighttime lighting
+            float moonlight = Math.max(0, -sunHeight * 0.5f);
+            sunColor.set(
+                    0.4f + moonlight * 0.2f,
+                    0.4f + moonlight * 0.2f,
+                    0.6f + moonlight * 0.3f
+            );
+            ambientColor.set(
+                    0.05f + moonlight * 0.1f,
+                    0.05f + moonlight * 0.1f,
+                    0.15f + moonlight * 0.2f
+            );
         }
     }
 
-    private Vector3f calculateAmbientColor(float dayNightCycle) {
-        float sunHeight = (float) Math.sin(dayNightCycle);
+    private void updateFogSettings(float sunHeight) {
         if (sunHeight > 0) {
-            // Daytime ambient
-            float intensity = Math.min(1.0f, sunHeight * 1.5f);
-            return new Vector3f(0.4f + intensity * 0.2f, 0.4f + intensity * 0.3f, 0.6f + intensity * 0.2f);
+            // Clear day
+            fogDensity = 0.005f + (1.0f - sunHeight) * 0.003f;
+            fogColor.set(0.6f, 0.7f, 0.9f);
         } else {
-            // Nighttime ambient
-            return new Vector3f(0.1f, 0.1f, 0.2f);
+            // Night fog
+            fogDensity = 0.012f;
+            fogColor.set(0.1f, 0.1f, 0.2f);
         }
     }
 
-    private void setupLighting(Vector3f sunDirection, Vector3f sunColor, Vector3f ambientColor) {
-        try {
-            // Setup OpenGL fixed pipeline lighting
-            glEnable(GL_LIGHTING);
-            glEnable(GL_LIGHT0);
+    private void setupMatrices(Camera camera) {
+        // Get matrices from camera
+        projectionMatrix.set(camera.getProjectionMatrix());
+        viewMatrix.set(camera.getViewMatrix());
 
-            // FIXED: Proper array sizes for OpenGL calls
-            float[] lightPos = {sunDirection.x * 1000, sunDirection.y * 1000, sunDirection.z * 1000, 0.0f};
-            float[] lightColor = {sunColor.x, sunColor.y, sunColor.z, 1.0f};
-            float[] ambientLight = {ambientColor.x, ambientColor.y, ambientColor.z, 1.0f};
+        // Set OpenGL matrices for legacy rendering
+        glMatrixMode(GL_PROJECTION);
+        projectionMatrix.get(matrixBuffer);
+        glLoadMatrixf(matrixBuffer);
 
-            glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
-            glLightfv(GL_LIGHT0, GL_DIFFUSE, lightColor);
-            glLightfv(GL_LIGHT0, GL_SPECULAR, lightColor);
-            glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambientLight);
-        } catch (Exception e) {
-            System.err.println("Error setting up lighting: " + e.getMessage());
-            // Disable lighting on error
-            glDisable(GL_LIGHTING);
-        }
+        glMatrixMode(GL_MODELVIEW);
+        viewMatrix.get(matrixBuffer);
+        glLoadMatrixf(matrixBuffer);
     }
 
-    private void renderEnhancedTerrain(Camera camera, Vector3f sunDirection, Vector3f sunColor, Vector3f ambientColor) {
-        try {
-            // Enable material properties
-            glEnable(GL_COLOR_MATERIAL);
-            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
+    private void beginFrame() {
+        // Clear buffers
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            // FIXED: Set terrain material properties with proper array sizes
-            float[] specular = {0.1f, 0.1f, 0.1f, 1.0f}; // Must be 4 elements
-            float[] shininess = {32.0f}; // Can be 1 element for GL_SHININESS
-
-            glMaterialfv(GL_FRONT, GL_SPECULAR, specular);
-            glMaterialfv(GL_FRONT, GL_SHININESS, shininess);
-
-            // Render terrain with wireframe overlay for detail
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glColor3f(0.3f, 0.6f, 0.2f); // Base terrain color
-            terrainManager.render();
-
-            // Add wireframe overlay for detail
+        // Set wireframe mode if enabled
+        if (wireframeEnabled) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            glColor3f(0.2f, 0.4f, 0.1f); // Darker green for wireframe
-            glEnable(GL_POLYGON_OFFSET_LINE);
-            glPolygonOffset(-1.0f, -1.0f);
-            terrainManager.render();
-            glDisable(GL_POLYGON_OFFSET_LINE);
-
-            // Reset to fill mode
+        } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glDisable(GL_COLOR_MATERIAL);
-
-        } catch (Exception e) {
-            System.err.println("Error rendering enhanced terrain: " + e.getMessage());
-            // Fallback to simple rendering
-            try {
-                glColor3f(0.3f, 0.6f, 0.2f);
-                terrainManager.render();
-            } catch (Exception e2) {
-                System.err.println("Even simple terrain rendering failed: " + e2.getMessage());
-            }
         }
+
+        // Setup fog
+        glFogf(GL_FOG_DENSITY, fogDensity);
+        float[] fogColorArray = {fogColor.x, fogColor.y, fogColor.z, 1.0f};
+        glFogfv(GL_FOG_COLOR, fogColorArray);
     }
 
-    // Enhanced terrain rendering with proper buffers:
-    private void renderEnhancedTerrainWithBuffers(Camera camera, Vector3f sunDirection, Vector3f sunColor, Vector3f ambientColor) {
-        try {
-            glEnable(GL_COLOR_MATERIAL);
-            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
-
-            // Set specular material using FloatBuffer
-            materialBuffer.clear();
-            materialBuffer.put(0.1f).put(0.1f).put(0.1f).put(1.0f);
-            materialBuffer.flip();
-            glMaterialfv(GL_FRONT, GL_SPECULAR, materialBuffer);
-
-            // Set shininess using single value
-            glMaterialf(GL_FRONT, GL_SHININESS, 32.0f);
-
-            // Render terrain
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glColor3f(0.3f, 0.6f, 0.2f);
-            terrainManager.render();
-
-            // Wireframe overlay
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            glColor3f(0.2f, 0.4f, 0.1f);
-            glEnable(GL_POLYGON_OFFSET_LINE);
-            glPolygonOffset(-1.0f, -1.0f);
-            terrainManager.render();
-            glDisable(GL_POLYGON_OFFSET_LINE);
-
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glDisable(GL_COLOR_MATERIAL);
-
-        } catch (Exception e) {
-            System.err.println("Error rendering enhanced terrain: " + e.getMessage());
-            // Fallback
-            glColor3f(0.3f, 0.6f, 0.2f);
-            terrainManager.render();
-        }
+    private void renderSky(Camera camera) {
+        glDisable(GL_DEPTH_TEST);
+        skyRenderer.render(camera, dayNightCycle, sunDirection, sunColor);
+        glEnable(GL_DEPTH_TEST);
+        drawCalls++;
     }
 
-    private void renderClouds(Camera camera, float time) {
-        try {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDisable(GL_LIGHTING);
+    private void renderTerrain(Camera camera) {
+        // Configure terrain rendering
+        lightingSystem.applyTerrainLighting();
 
-            for (int i = 0; i < cloudPositions.size(); i++) {
-                Vector3f cloudPos = cloudPositions.get(i);
+        // Render terrain
+        terrainManager.render();
+        drawCalls++;
 
-                // Move clouds slowly
-                cloudPos.x += 0.01f * Math.sin(time * 0.1f + i);
-                cloudPos.z += 0.005f * Math.cos(time * 0.15f + i);
-
-                // Wrap around world
-                if (cloudPos.x > 100) cloudPos.x = -100;
-                if (cloudPos.x < -100) cloudPos.x = 100;
-                if (cloudPos.z > 100) cloudPos.z = -100;
-                if (cloudPos.z < -100) cloudPos.z = 100;
-
-                renderCloud(cloudPos, time + i, camera);
-            }
-
-            glDisable(GL_BLEND);
-            glEnable(GL_LIGHTING);
-        } catch (Exception e) {
-            System.err.println("Error rendering clouds: " + e.getMessage());
-        }
+        // Add terrain stats
+        trianglesRendered += estimateTerrainTriangles();
     }
 
-    private void renderCloud(Vector3f position, float time, Camera camera) {
-        try {
+    private int estimateTerrainTriangles() {
+        // Rough estimate based on visible chunks
+        return terrainManager.getVisibleChunkCount() * 2048; // Assume ~2k triangles per chunk
+    }
+
+    private void renderAnimatedObjects(GameState gameState) {
+        lightingSystem.applyObjectLighting();
+
+        for (AnimatedObject obj : animatedObjects) {
             glPushMatrix();
-            glTranslatef(position.x, position.y, position.z);
 
-            // Simple cloud rendering with multiple spheres
-            glColor4f(0.9f, 0.9f, 0.9f, 0.6f);
+            // Calculate animated position
+            Vector3f pos = obj.getAnimatedPosition(gameState.getTime());
+            glTranslatef(pos.x, pos.y, pos.z);
 
-            for (int i = 0; i < 5; i++) {
-                glPushMatrix();
-                float offsetX = (float) Math.sin(time * 0.5f + i) * 2.0f;
-                float offsetY = (float) Math.cos(time * 0.3f + i) * 0.5f;
-                float offsetZ = (float) Math.sin(time * 0.4f + i * 0.7f) * 1.5f;
+            // Calculate animated rotation
+            Vector3f rotation = obj.getAnimatedRotation(gameState.getTime());
+            glRotatef(rotation.x, 1, 0, 0);
+            glRotatef(rotation.y, 0, 1, 0);
+            glRotatef(rotation.z, 0, 0, 1);
 
-                glTranslatef(offsetX, offsetY, offsetZ);
-                renderSphere(1.5f + (float) Math.sin(time + i) * 0.3f);
-                glPopMatrix();
-            }
+            // Set color
+            glColor3f(obj.color.x, obj.color.y, obj.color.z);
+
+            // Render object
+            objectRenderer.renderCube();
+            trianglesRendered += 12; // Cube has 12 triangles
 
             glPopMatrix();
-        } catch (Exception e) {
-            System.err.println("Error rendering individual cloud: " + e.getMessage());
         }
+        drawCalls += animatedObjects.size();
     }
 
-    private void renderSphere(float radius) {
-        try {
-            // Simple sphere approximation using quads
-            int segments = 12;
-            for (int i = 0; i < segments; i++) {
-                float theta1 = (float) (i * 2 * Math.PI / segments);
-                float theta2 = (float) ((i + 1) * 2 * Math.PI / segments);
+    private void renderParticles(Camera camera, float time) {
+        glDisable(GL_LIGHTING);
+        glEnable(GL_BLEND);
+        glDepthMask(false);
 
-                glBegin(GL_TRIANGLE_STRIP);
-                for (int j = 0; j <= segments; j++) {
-                    float phi = (float) (j * Math.PI / segments);
+        particleRenderer.render(camera, time);
+        drawCalls++;
 
-                    float x1 = (float) (radius * Math.cos(theta1) * Math.sin(phi));
-                    float y1 = (float) (radius * Math.cos(phi));
-                    float z1 = (float) (radius * Math.sin(theta1) * Math.sin(phi));
-
-                    float x2 = (float) (radius * Math.cos(theta2) * Math.sin(phi));
-                    float y2 = (float) (radius * Math.cos(phi));
-                    float z2 = (float) (radius * Math.sin(theta2) * Math.sin(phi));
-
-                    glVertex3f(x1, y1, z1);
-                    glVertex3f(x2, y2, z2);
-                }
-                glEnd();
-            }
-        } catch (Exception e) {
-            System.err.println("Error rendering sphere: " + e.getMessage());
-        }
+        glDepthMask(true);
+        glDisable(GL_BLEND);
+        glEnable(GL_LIGHTING);
     }
 
-    private void renderAnimatedObjects(GameState gameState, Vector3f sunColor, Vector3f ambientColor) {
-        try {
-            // Enhanced animated cubes with better materials
-            glEnable(GL_COLOR_MATERIAL);
-            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
-
-            // FIXED: Proper array sizes
-            float[] specular = {0.5f, 0.5f, 0.5f, 1.0f}; // Must be 4 elements
-            float[] shininess = {64.0f}; // 1 element for shininess
-            glMaterialfv(GL_FRONT, GL_SPECULAR, specular);
-            glMaterialfv(GL_FRONT, GL_SHININESS, shininess);
-
-            for (int i = 0; i < 8; i++) {
-                glPushMatrix();
-
-                float x = (float) Math.cos(gameState.getTime() * 0.5f + i * 0.8f) * 5.0f;
-                float z = (float) Math.sin(gameState.getTime() * 0.3f + i * 0.9f) * 5.0f;
-                float y = (float) Math.sin(gameState.getTime() * 2 + i) * 1.0f + 3.0f;
-
-                glTranslatef(x, y, z);
-                glRotatef(gameState.getTime() * 30 + i * 45, 1.0f, 1.0f, 0.0f);
-
-                // Color based on position and time
-                float r = 0.5f + 0.5f * (float) Math.sin(gameState.getTime() + i);
-                float g = 0.5f + 0.5f * (float) Math.cos(gameState.getTime() * 0.7f + i);
-                float b = 0.5f + 0.5f * (float) Math.sin(gameState.getTime() * 1.3f + i);
-                glColor3f(r, g, b);
-
-                renderEnhancedCube();
-                glPopMatrix();
-            }
-
-            glDisable(GL_COLOR_MATERIAL);
-        } catch (Exception e) {
-            System.err.println("Error rendering animated objects: " + e.getMessage());
-        }
-    }
-
-    // Enhanced animated objects with proper buffers:
-    private void renderAnimatedObjectsWithBuffers(GameState gameState, Vector3f sunColor, Vector3f ambientColor) {
-        try {
-            glEnable(GL_COLOR_MATERIAL);
-            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
-
-            // Set specular material using FloatBuffer
-            materialBuffer.clear();
-            materialBuffer.put(0.5f).put(0.5f).put(0.5f).put(1.0f);
-            materialBuffer.flip();
-            glMaterialfv(GL_FRONT, GL_SPECULAR, materialBuffer);
-
-            // Set shininess
-            glMaterialf(GL_FRONT, GL_SHININESS, 64.0f);
-
-            for (int i = 0; i < 8; i++) {
-                glPushMatrix();
-
-                float x = (float) Math.cos(gameState.getTime() * 0.5f + i * 0.8f) * 5.0f;
-                float z = (float) Math.sin(gameState.getTime() * 0.3f + i * 0.9f) * 5.0f;
-                float y = (float) Math.sin(gameState.getTime() * 2 + i) * 1.0f + 3.0f;
-
-                glTranslatef(x, y, z);
-                glRotatef(gameState.getTime() * 30 + i * 45, 1.0f, 1.0f, 0.0f);
-
-                float r = 0.5f + 0.5f * (float) Math.sin(gameState.getTime() + i);
-                float g = 0.5f + 0.5f * (float) Math.cos(gameState.getTime() * 0.7f + i);
-                float b = 0.5f + 0.5f * (float) Math.sin(gameState.getTime() * 1.3f + i);
-                glColor3f(r, g, b);
-
-                renderEnhancedCube();
-                glPopMatrix();
-            }
-
-            glDisable(GL_COLOR_MATERIAL);
-        } catch (Exception e) {
-            System.err.println("Error rendering animated objects: " + e.getMessage());
-        }
-    }
-
-    private void renderEnhancedCube() {
-        try {
-            glBegin(GL_QUADS);
-
-            // Front face
-            glNormal3f(0.0f, 0.0f, 1.0f);
-            glVertex3f(-0.5f, -0.5f, 0.5f);
-            glVertex3f(0.5f, -0.5f, 0.5f);
-            glVertex3f(0.5f, 0.5f, 0.5f);
-            glVertex3f(-0.5f, 0.5f, 0.5f);
-
-            // Back face
-            glNormal3f(0.0f, 0.0f, -1.0f);
-            glVertex3f(-0.5f, -0.5f, -0.5f);
-            glVertex3f(-0.5f, 0.5f, -0.5f);
-            glVertex3f(0.5f, 0.5f, -0.5f);
-            glVertex3f(0.5f, -0.5f, -0.5f);
-
-            // Top face
-            glNormal3f(0.0f, 1.0f, 0.0f);
-            glVertex3f(-0.5f, 0.5f, -0.5f);
-            glVertex3f(-0.5f, 0.5f, 0.5f);
-            glVertex3f(0.5f, 0.5f, 0.5f);
-            glVertex3f(0.5f, 0.5f, -0.5f);
-
-            // Bottom face
-            glNormal3f(0.0f, -1.0f, 0.0f);
-            glVertex3f(-0.5f, -0.5f, -0.5f);
-            glVertex3f(0.5f, -0.5f, -0.5f);
-            glVertex3f(0.5f, -0.5f, 0.5f);
-            glVertex3f(-0.5f, -0.5f, 0.5f);
-
-            // Right face
-            glNormal3f(1.0f, 0.0f, 0.0f);
-            glVertex3f(0.5f, -0.5f, -0.5f);
-            glVertex3f(0.5f, 0.5f, -0.5f);
-            glVertex3f(0.5f, 0.5f, 0.5f);
-            glVertex3f(0.5f, -0.5f, 0.5f);
-
-            // Left face
-            glNormal3f(-1.0f, 0.0f, 0.0f);
-            glVertex3f(-0.5f, -0.5f, -0.5f);
-            glVertex3f(-0.5f, -0.5f, 0.5f);
-            glVertex3f(-0.5f, 0.5f, 0.5f);
-            glVertex3f(-0.5f, 0.5f, -0.5f);
-
-            glEnd();
-        } catch (Exception e) {
-            System.err.println("Error rendering cube: " + e.getMessage());
-        }
+    private void renderAtmosphericEffects(Camera camera) {
+        atmosphericRenderer.render(camera, sunDirection, sunColor, fogColor, fogDensity);
+        drawCalls++;
     }
 
     private void renderUI(Camera camera, GameState gameState) {
-        try {
-            // Disable depth testing for UI
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_LIGHTING);
+        // Disable depth testing for UI
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_LIGHTING);
 
-            // Set up orthographic projection for UI
-            glMatrixMode(GL_PROJECTION);
-            glPushMatrix();
-            glLoadIdentity();
-            glOrtho(0, 1920, 1080, 0, -1, 1);
-            glMatrixMode(GL_MODELVIEW);
-            glPushMatrix();
-            glLoadIdentity();
+        // Setup 2D projection
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0, 1920, 1080, 0, -1, 1);
 
-            // Render crosshair
-            glColor3f(1.0f, 1.0f, 1.0f);
-            glBegin(GL_LINES);
-            glVertex2f(960 - 10, 540);
-            glVertex2f(960 + 10, 540);
-            glVertex2f(960, 540 - 10);
-            glVertex2f(960, 540 + 10);
-            glEnd();
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
 
-            // Restore matrices
-            glPopMatrix();
-            glMatrixMode(GL_PROJECTION);
-            glPopMatrix();
-            glMatrixMode(GL_MODELVIEW);
+        // Render UI elements
+        uiRenderer.renderCrosshair();
 
-            // Re-enable depth testing
-            glEnable(GL_DEPTH_TEST);
-            glEnable(GL_LIGHTING);
-        } catch (Exception e) {
-            System.err.println("Error rendering UI: " + e.getMessage());
+        if (debugRenderingEnabled) {
+            uiRenderer.renderDebugInfo(getDebugInfo(camera));
         }
+
+        // Restore matrices
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+
+        // Re-enable depth testing
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_LIGHTING);
+
+        drawCalls++;
     }
 
+    private void endFrame() {
+        // Reset polygon mode
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+        // Flush OpenGL commands
+        glFlush();
+    }
+
+    private void updateRenderStats() {
+        renderStats.update(trianglesRendered, drawCalls, renderTimeNanos);
+    }
+
+    private String getDebugInfo(Camera camera) {
+        Vector3f pos = camera.getPosition();
+        Vector3f vel = camera.getVelocity();
+
+        return String.format(
+                "=== RENDER DEBUG ===\n" +
+                        "Triangles: %,d\n" +
+                        "Draw Calls: %d\n" +
+                        "Render Time: %.2f ms\n" +
+                        "FPS: %.1f\n" +
+                        "%s\n" +
+                        "Position: %.1f, %.1f, %.1f\n" +
+                        "Velocity: %.2f\n" +
+                        "FOV: %.1f°\n" +
+                        "Day/Night: %.1f°\n" +
+                        "Fog Density: %.4f",
+                trianglesRendered,
+                drawCalls,
+                renderTimeNanos / 1_000_000.0,
+                renderStats.getAverageFPS(),
+                terrainManager.getPerformanceInfo(),
+                pos.x, pos.y, pos.z,
+                vel.length(),
+                camera.getFov(),
+                Math.toDegrees(dayNightCycle),
+                fogDensity
+        );
+    }
+
+    /**
+     * Set rendering options
+     */
+    public void setWireframeEnabled(boolean enabled) {
+        this.wireframeEnabled = enabled;
+    }
+
+    public void setDebugRenderingEnabled(boolean enabled) {
+        this.debugRenderingEnabled = enabled;
+    }
+
+    public void setFogDensity(float density) {
+        this.fogDensity = Math.max(0.0f, Math.min(1.0f, density));
+    }
+
+    /**
+     * Camera shake effect
+     */
+    public void shake(float intensity, float duration) {
+        // This would typically be handled by the camera
+        // but can also add screen-space shake effects here
+    }
+
+    /**
+     * Cleanup resources
+     */
     public void cleanup() {
         try {
-            if (terrainManager != null) terrainManager.cleanup();
-            if (atmosphericEffects != null) atmosphericEffects.cleanup();
-            if (particleSystem != null) particleSystem.cleanup();
-            if (skyRenderer != null) skyRenderer.cleanup();
+            atmosphericRenderer.cleanup();
+            particleRenderer.cleanup();
+            skyRenderer.cleanup();
+            postProcessor.cleanup();
+            uiRenderer.cleanup();
+            objectRenderer.cleanup();
+            lightingSystem.cleanup();
 
-            // Free the material buffer
-            if (materialBuffer != null) {
-                org.lwjgl.system.MemoryUtil.memFree(materialBuffer);
+            if (matrixBuffer != null) {
+                org.lwjgl.system.MemoryUtil.memFree(matrixBuffer);
             }
         } catch (Exception e) {
-            System.err.println("Error during cleanup: " + e.getMessage());
+            System.err.println("Error during renderer cleanup: " + e.getMessage());
         }
     }
 
-    // Inner classes for atmospheric effects
-    private static class AtmosphericEffects {
-        public void render(Camera camera, Vector3f sunDirection, Vector3f sunColor) {
-            try {
-                // Render atmospheric haze, fog, etc.
-                renderFog(camera, sunColor);
-            } catch (Exception e) {
-                System.err.println("Error rendering atmospheric effects: " + e.getMessage());
-            }
+    // Getters
+    public boolean isWireframeEnabled() {
+        return wireframeEnabled;
+    }
+
+    public boolean isDebugRenderingEnabled() {
+        return debugRenderingEnabled;
+    }
+
+    public float getFogDensity() {
+        return fogDensity;
+    }
+
+    public int getTrianglesRendered() {
+        return trianglesRendered;
+    }
+
+    public int getDrawCalls() {
+        return drawCalls;
+    }
+
+    public RenderStats getRenderStats() {
+        return renderStats;
+    }
+
+    /**
+     * Animated object class
+     */
+    private static class AnimatedObject {
+        public final Vector3f basePosition = new Vector3f();
+        public final Vector3f color = new Vector3f(1, 1, 1);
+        public float animationSpeed = 1.0f;
+        public float animationOffset = 0.0f;
+
+        public Vector3f getAnimatedPosition(float time) {
+            float animTime = time * animationSpeed + animationOffset;
+            return new Vector3f(
+                    basePosition.x + (float) Math.sin(animTime * 0.7f) * 3.0f,
+                    basePosition.y + (float) Math.sin(animTime * 2.0f) * 2.0f,
+                    basePosition.z + (float) Math.cos(animTime * 0.5f) * 3.0f
+            );
         }
 
-        private void renderFog(Camera camera, Vector3f sunColor) {
-            try {
-                // Simple fog effect using OpenGL fog
-                glEnable(GL_FOG);
-                float[] fogColor = {sunColor.x * 0.5f, sunColor.y * 0.5f, sunColor.z * 0.5f + 0.2f, 1.0f};
-                glFogfv(GL_FOG_COLOR, fogColor);
-                glFogf(GL_FOG_DENSITY, 0.01f);
-                glFogi(GL_FOG_MODE, GL_EXP2);
-            } catch (Exception e) {
-                System.err.println("Error setting up fog: " + e.getMessage());
-                glDisable(GL_FOG);
-            }
-        }
-
-        public void cleanup() {
-            try {
-                glDisable(GL_FOG);
-            } catch (Exception e) {
-                System.err.println("Error cleaning up atmospheric effects: " + e.getMessage());
-            }
+        public Vector3f getAnimatedRotation(float time) {
+            float animTime = time * animationSpeed + animationOffset;
+            return new Vector3f(
+                    animTime * 45.0f,
+                    animTime * 30.0f,
+                    animTime * 60.0f
+            );
         }
     }
 
-    private static class ParticleSystem {
-        private List<Particle> particles = new ArrayList<>();
-
-        public void update(float time) {
+    /**
+     * Lighting system
+     */
+    private static class LightingSystem {
+        public void update(float dayNightCycle, Vector3f sunDirection, Vector3f sunColor, Vector3f ambientColor) {
             try {
-                // Update particle positions, add/remove particles
-                particles.removeIf(p -> p.life <= 0);
-
-                // Add new particles occasionally
-                if (Math.random() < 0.1f) {
-                    particles.add(new Particle(
-                            (float) (Math.random() - 0.5) * 50,
-                            30 + (float) Math.random() * 20,
-                            (float) (Math.random() - 0.5) * 50,
-                            time
-                    ));
-                }
-
-                // Update existing particles
-                for (Particle p : particles) {
-                    p.update();
-                }
-            } catch (Exception e) {
-                System.err.println("Error updating particles: " + e.getMessage());
-            }
-        }
-
-        public void render(Camera camera) {
-            try {
-                glDisable(GL_LIGHTING);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                glColor4f(1.0f, 1.0f, 1.0f, 0.8f);
-                glPointSize(3.0f);
-
-                glBegin(GL_POINTS);
-                for (Particle p : particles) {
-                    glVertex3f(p.x, p.y, p.z);
-                }
-                glEnd();
-
-                glDisable(GL_BLEND);
                 glEnable(GL_LIGHTING);
+                glEnable(GL_LIGHT0);
+
+                // Set light position (directional light)
+                float[] lightPos = {
+                        sunDirection.x * 1000,
+                        sunDirection.y * 1000,
+                        sunDirection.z * 1000,
+                        0.0f // Directional light
+                };
+                glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
+
+                // Set light colors
+                float[] diffuse = {sunColor.x, sunColor.y, sunColor.z, 1.0f};
+                float[] specular = {sunColor.x * 0.8f, sunColor.y * 0.8f, sunColor.z * 0.8f, 1.0f};
+                float[] ambient = {ambientColor.x, ambientColor.y, ambientColor.z, 1.0f};
+
+                glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse);
+                glLightfv(GL_LIGHT0, GL_SPECULAR, specular);
+                glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
+
             } catch (Exception e) {
-                System.err.println("Error rendering particles: " + e.getMessage());
-            }
-        }
-
-        public void cleanup() {
-            particles.clear();
-        }
-    }
-
-    private static class Particle {
-        float x, y, z;
-        float vx, vy, vz;
-        float life;
-
-        public Particle(float x, float y, float z, float time) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-            this.vx = (float) (Math.random() - 0.5) * 0.1f;
-            this.vy = -0.2f - (float) Math.random() * 0.1f;
-            this.vz = (float) (Math.random() - 0.5) * 0.1f;
-            this.life = 100 + (float) Math.random() * 50;
-        }
-
-        public void update() {
-            x += vx;
-            y += vy;
-            z += vz;
-            life--;
-        }
-    }
-
-    private static class SkyRenderer {
-        public void render(Camera camera, float dayNightCycle, Vector3f sunDirection) {
-            try {
-                // Render sky gradient
-                glDisable(GL_DEPTH_TEST);
+                System.err.println("Error updating lighting: " + e.getMessage());
                 glDisable(GL_LIGHTING);
-
-                // Sky dome or gradient
-                renderSkyGradient(dayNightCycle);
-
-                // Render sun/moon
-                renderSun(sunDirection, dayNightCycle);
-
-                glEnable(GL_DEPTH_TEST);
-                glEnable(GL_LIGHTING);
-            } catch (Exception e) {
-                System.err.println("Error rendering sky: " + e.getMessage());
             }
         }
 
-        private void renderSkyGradient(float dayNightCycle) {
-            try {
-                glBegin(GL_QUADS);
+        public void applyTerrainLighting() {
+            glEnable(GL_COLOR_MATERIAL);
+            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
 
-                // Calculate sky colors based on time of day
-                float sunHeight = (float) Math.sin(dayNightCycle);
-                Vector3f horizonColor, zenithColor;
-
-                if (sunHeight > 0) {
-                    // Daytime colors
-                    horizonColor = new Vector3f(0.8f, 0.9f, 1.0f);
-                    zenithColor = new Vector3f(0.5f, 0.7f, 1.0f);
-                } else {
-                    // Nighttime colors
-                    horizonColor = new Vector3f(0.1f, 0.1f, 0.2f);
-                    zenithColor = new Vector3f(0.0f, 0.0f, 0.1f);
-                }
-
-                // Render sky quad
-                glColor3f(horizonColor.x, horizonColor.y, horizonColor.z);
-                glVertex3f(-1000, -100, -1000);
-                glVertex3f(1000, -100, -1000);
-                glColor3f(zenithColor.x, zenithColor.y, zenithColor.z);
-                glVertex3f(1000, 100, -1000);
-                glVertex3f(-1000, 100, -1000);
-
-                glEnd();
-            } catch (Exception e) {
-                System.err.println("Error rendering sky gradient: " + e.getMessage());
-            }
+            float[] specular = {0.2f, 0.2f, 0.2f, 1.0f};
+            glMaterialfv(GL_FRONT, GL_SPECULAR, specular);
+            glMaterialf(GL_FRONT, GL_SHININESS, 16.0f);
         }
 
-        private void renderSun(Vector3f sunDirection, float dayNightCycle) {
-            try {
-                float sunHeight = (float) Math.sin(dayNightCycle);
-                if (sunHeight > -0.1f) {
-                    glPushMatrix();
-                    glTranslatef(sunDirection.x * 500, sunDirection.y * 500, sunDirection.z * 500);
+        public void applyObjectLighting() {
+            glEnable(GL_COLOR_MATERIAL);
+            glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
 
-                    glColor3f(1.0f, 1.0f, 0.8f);
-                    renderSphere(10.0f);
-
-                    glPopMatrix();
-                }
-            } catch (Exception e) {
-                System.err.println("Error rendering sun: " + e.getMessage());
-            }
-        }
-
-        private void renderSphere(float radius) {
-            try {
-                // Simple sphere for sun
-                int segments = 16;
-                for (int i = 0; i < segments; i++) {
-                    float theta1 = (float) (i * 2 * Math.PI / segments);
-                    float theta2 = (float) ((i + 1) * 2 * Math.PI / segments);
-
-                    glBegin(GL_TRIANGLE_STRIP);
-                    for (int j = 0; j <= segments; j++) {
-                        float phi = (float) (j * Math.PI / segments);
-
-                        float x1 = (float) (radius * Math.cos(theta1) * Math.sin(phi));
-                        float y1 = (float) (radius * Math.cos(phi));
-                        float z1 = (float) (radius * Math.sin(theta1) * Math.sin(phi));
-
-                        float x2 = (float) (radius * Math.cos(theta2) * Math.sin(phi));
-                        float y2 = (float) (radius * Math.cos(phi));
-                        float z2 = (float) (radius * Math.sin(theta2) * Math.sin(phi));
-
-                        glVertex3f(x1, y1, z1);
-                        glVertex3f(x2, y2, z2);
-                    }
-                    glEnd();
-                }
-            } catch (Exception e) {
-                System.err.println("Error rendering sphere in sky: " + e.getMessage());
-            }
+            float[] specular = {0.5f, 0.5f, 0.5f, 1.0f};
+            glMaterialfv(GL_FRONT, GL_SPECULAR, specular);
+            glMaterialf(GL_FRONT, GL_SHININESS, 64.0f);
         }
 
         public void cleanup() {
-            // Cleanup sky resources
+            glDisable(GL_LIGHTING);
+            glDisable(GL_COLOR_MATERIAL);
+        }
+    }
+
+    /**
+     * Performance statistics tracking
+     */
+    public static class RenderStats {
+        private static final int SAMPLE_SIZE = 60;
+        private final long[] frameTimes = new long[SAMPLE_SIZE];
+        private final int[] triangleCounts = new int[SAMPLE_SIZE];
+        private final int[] drawCallCounts = new int[SAMPLE_SIZE];
+        private int sampleIndex = 0;
+        private int sampleCount = 0;
+
+        public void update(int triangles, int drawCalls, long renderTimeNanos) {
+            frameTimes[sampleIndex] = renderTimeNanos;
+            triangleCounts[sampleIndex] = triangles;
+            drawCallCounts[sampleIndex] = drawCalls;
+
+            sampleIndex = (sampleIndex + 1) % SAMPLE_SIZE;
+            sampleCount = Math.min(sampleCount + 1, SAMPLE_SIZE);
+        }
+
+        public double getAverageFrameTime() {
+            if (sampleCount == 0) return 0;
+
+            long sum = 0;
+            for (int i = 0; i < sampleCount; i++) {
+                sum += frameTimes[i];
+            }
+            return (double) sum / sampleCount / 1_000_000.0; // Convert to milliseconds
+        }
+
+        public double getAverageFPS() {
+            double frameTime = getAverageFrameTime();
+            return frameTime > 0 ? 1000.0 / frameTime : 0;
+        }
+
+        public double getAverageTriangles() {
+            if (sampleCount == 0) return 0;
+
+            long sum = 0;
+            for (int i = 0; i < sampleCount; i++) {
+                sum += triangleCounts[i];
+            }
+            return (double) sum / sampleCount;
+        }
+
+        public double getAverageDrawCalls() {
+            if (sampleCount == 0) return 0;
+
+            long sum = 0;
+            for (int i = 0; i < sampleCount; i++) {
+                sum += drawCallCounts[i];
+            }
+            return (double) sum / sampleCount;
         }
     }
 }
