@@ -200,6 +200,7 @@ public class Window {
 
         gameState = new GameState();
         terrainManager = new TerrainManager();
+
         renderer = new MasterRenderer(terrainManager);
         inputHandler = new InputHandler(window, camera);
 

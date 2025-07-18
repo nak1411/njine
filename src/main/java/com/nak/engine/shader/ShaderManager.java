@@ -102,7 +102,8 @@ public class ShaderManager {
                 "terrain", "terrain.vert", "terrain.frag",
                 "skybox", "skybox.vert", "skybox.frag",
                 "particle", "particle.vert", "particle.frag",
-                "water", "water.vert", "water.frag"
+                "water", "water.vert", "water.frag",
+                "ui", "ui.vert", "ui.frag"
         };
 
         for (int i = 0; i < shaderPairs.length; i += 3) {
@@ -358,12 +359,8 @@ public class ShaderManager {
         System.out.println("Stopped shader file watcher");
     }
 
-
-
     public boolean reloadProgram(String name) {
-
         try {
-
             // After successful reload, notify listeners
             notifyShaderReloaded(name);
             System.out.println("Reloaded shader program: " + name);
@@ -372,6 +369,12 @@ public class ShaderManager {
         } catch (Exception e) {
             System.err.println("Failed to reload shader program '" + name + "': " + e.getMessage());
             return false;
+        }
+    }
+
+    public void reloadAllPrograms() {
+        for (String programName : new HashSet<>(programs.keySet())) {
+            reloadProgram(programName);
         }
     }
 
@@ -463,11 +466,470 @@ public class ShaderManager {
         return result.toString();
     }
 
+    private String extractIncludePath(String includeLine) {
+        // Extract path from #include "path" or #include <path>
+        int start = includeLine.indexOf('"');
+        if (start == -1) start = includeLine.indexOf('<');
+        if (start == -1) return null;
+
+        int end = includeLine.indexOf('"', start + 1);
+        if (end == -1) end = includeLine.indexOf('>', start + 1);
+        if (end == -1) return null;
+
+        return includeLine.substring(start + 1, end);
+    }
+
     private String getFallbackIncludeContent(String includePath) {
         return switch (includePath) {
             case "common.glsl" -> getCommonShaderCode();
             case "lighting.glsl" -> getLightingShaderCode();
             default -> "// Fallback: " + includePath + " not found\n";
         };
+    }
+
+    /**
+     * Built-in shader sources
+     */
+    private String getDefaultTerrainVertexShader() {
+        return """
+                #version 330 core
+                
+                layout (location = 0) in vec3 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec3 normal;
+                layout (location = 3) in vec3 tangent;
+                layout (location = 4) in vec3 color;
+                
+                uniform mat4 projectionMatrix;
+                uniform mat4 viewMatrix;
+                uniform mat4 modelMatrix;
+                uniform mat4 lightSpaceMatrix;
+                
+                out vec3 fragPos;
+                out vec2 texCoords;
+                out vec3 fragNormal;
+                out vec3 fragTangent;
+                out vec3 vertexColor;
+                out vec4 fragPosLightSpace;
+                out float height;
+                
+                void main() {
+                    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                    fragPos = worldPos.xyz;
+                    texCoords = texCoord;
+                    fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
+                    fragTangent = mat3(transpose(inverse(modelMatrix))) * tangent;
+                    vertexColor = color;
+                    fragPosLightSpace = lightSpaceMatrix * worldPos;
+                    height = position.y;
+                
+                    gl_Position = projectionMatrix * viewMatrix * worldPos;
+                }
+                """;
+    }
+
+    private String getDefaultTerrainFragmentShader() {
+        return """
+                #version 330 core
+                
+                in vec3 fragPos;
+                in vec2 texCoords;
+                in vec3 fragNormal;
+                in vec3 fragTangent;
+                in vec3 vertexColor;
+                in vec4 fragPosLightSpace;
+                in float height;
+                
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                uniform vec3 lightDirection;
+                uniform float ambientStrength;
+                uniform float specularStrength;
+                uniform float shininess;
+                
+                uniform vec3 viewPosition;
+                uniform vec3 fogColor;
+                uniform float fogDensity;
+                
+                out vec4 fragColor;
+                
+                vec3 calculateLighting() {
+                    vec3 norm = normalize(fragNormal);
+                    vec3 lightDir = normalize(lightPosition - fragPos);
+                
+                    // Ambient
+                    vec3 ambient = ambientStrength * lightColor;
+                
+                    // Diffuse
+                    float diff = max(dot(norm, lightDir), 0.0);
+                    vec3 diffuse = diff * lightColor;
+                
+                    // Specular
+                    vec3 viewDir = normalize(viewPosition - fragPos);
+                    vec3 reflectDir = reflect(-lightDir, norm);
+                    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+                    vec3 specular = specularStrength * spec * lightColor;
+                
+                    return ambient + diffuse + specular;
+                }
+                
+                void main() {
+                    vec3 lighting = calculateLighting();
+                    vec3 finalColor = vertexColor * lighting;
+                
+                    // Apply fog
+                    float distance = length(viewPosition - fragPos);
+                    float fogFactor = exp(-fogDensity * distance);
+                    fogFactor = clamp(fogFactor, 0.0, 1.0);
+                    finalColor = mix(fogColor, finalColor, fogFactor);
+                
+                    fragColor = vec4(finalColor, 1.0);
+                }
+                """;
+    }
+
+    private String getBasicVertexShader() {
+        return """
+                #version 330 core
+                layout (location = 0) in vec3 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec3 normal;
+                layout (location = 3) in vec4 color;
+                
+                uniform mat4 mvpMatrix;
+                uniform mat4 modelMatrix;
+                uniform mat4 viewMatrix;
+                uniform mat4 projectionMatrix;
+                
+                out vec2 texCoords;
+                out vec3 fragNormal;
+                out vec4 vertexColor;
+                out vec3 fragPos;
+                
+                void main() {
+                    fragPos = (modelMatrix * vec4(position, 1.0)).xyz;
+                    texCoords = texCoord;
+                    fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
+                    vertexColor = color;
+                    
+                    if (length(mvpMatrix[0]) > 0.1) {
+                        gl_Position = mvpMatrix * vec4(position, 1.0);
+                    } else {
+                        gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+                    }
+                }
+                """;
+    }
+
+    private String getBasicFragmentShader() {
+        return """
+                #version 330 core
+                in vec2 texCoords;
+                in vec3 fragNormal;
+                in vec4 vertexColor;
+                in vec3 fragPos;
+                
+                uniform sampler2D texture0;
+                uniform bool useTexture;
+                uniform vec4 uniformColor;
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                uniform vec3 viewPosition;
+                
+                out vec4 fragColor;
+                
+                void main() {
+                    vec4 finalColor = vertexColor;
+                    
+                    if (useTexture && textureSize(texture0, 0).x > 1) {
+                        finalColor *= texture(texture0, texCoords);
+                    }
+                    
+                    if (uniformColor.a > 0.0) {
+                        finalColor *= uniformColor;
+                    }
+                    
+                    // Simple lighting if light is available
+                    if (length(lightPosition) > 0.1) {
+                        vec3 norm = normalize(fragNormal);
+                        vec3 lightDir = normalize(lightPosition - fragPos);
+                        float diff = max(dot(norm, lightDir), 0.0);
+                        finalColor.rgb *= (0.3 + 0.7 * diff);
+                    }
+                    
+                    fragColor = finalColor;
+                }
+                """;
+    }
+
+    private String getSkyboxVertexShader() {
+        return """
+                #version 330 core
+                layout (location = 0) in vec3 position;
+                
+                uniform mat4 projectionMatrix;
+                uniform mat4 viewMatrix;
+                uniform float dayNightCycle;
+                uniform vec3 sunDirection;
+                
+                out vec3 texCoords;
+                out vec3 worldPos;
+                out float sunHeight;
+                
+                void main() {
+                    texCoords = position;
+                    worldPos = position;
+                    sunHeight = sin(dayNightCycle);
+                
+                    // Remove translation from view matrix for skybox
+                    mat4 rotView = mat4(mat3(viewMatrix));
+                    vec4 pos = projectionMatrix * rotView * vec4(position, 1.0);
+                
+                    // Ensure skybox is always at far plane
+                    gl_Position = pos.xyww;
+                }
+                """;
+    }
+
+    private String getSkyboxFragmentShader() {
+        return """
+                #version 330 core
+                in vec3 texCoords;
+                in vec3 worldPos;
+                in float sunHeight;
+                
+                uniform vec3 sunDirection;
+                uniform vec3 sunColor;
+                uniform float dayNightCycle;
+                
+                out vec4 fragColor;
+                
+                vec3 getSkyColor() {
+                    vec3 viewDir = normalize(texCoords);
+                    float height = viewDir.y;
+                
+                    vec3 skyColor;
+                    vec3 horizonColor;
+                
+                    if (sunHeight > 0.0) {
+                        // Day sky
+                        float intensity = min(1.0, sunHeight * 2.0);
+                        skyColor = vec3(0.4 + intensity * 0.3, 0.6 + intensity * 0.2, 1.0);
+                        horizonColor = vec3(0.7 + intensity * 0.2, 0.8 + intensity * 0.1, 1.0);
+                    } else {
+                        // Night sky
+                        skyColor = vec3(0.05, 0.05, 0.15);
+                        horizonColor = vec3(0.1, 0.1, 0.3);
+                    }
+                
+                    // Gradient from horizon to zenith
+                    float t = max(0.0, height);
+                    return mix(horizonColor, skyColor, t);
+                }
+                
+                vec3 getSunColor() {
+                    vec3 viewDir = normalize(texCoords);
+                    float sunDot = dot(viewDir, normalize(sunDirection));
+                
+                    if (sunHeight > -0.2 && sunDot > 0.999) {
+                        // Sun disk
+                        float intensity = max(0.1, sunHeight);
+                        return vec3(1.0, 0.9, 0.7) * intensity * 3.0;
+                    } else if (sunHeight <= -0.2) {
+                        // Moon
+                        vec3 moonDir = -sunDirection;
+                        float moonDot = dot(viewDir, normalize(moonDir));
+                        if (moonDot > 0.9985) {
+                            return vec3(0.8, 0.8, 0.9) * 2.0;
+                        }
+                    }
+                
+                    return vec3(0.0);
+                }
+                
+                void main() {
+                    vec3 skyColor = getSkyColor();
+                    vec3 celestialColor = getSunColor();
+                
+                    vec3 finalColor = skyColor + celestialColor;
+                
+                    fragColor = vec4(finalColor, 1.0);
+                }
+                """;
+    }
+
+    private String getUIVertexShader() {
+        return """
+                #version 330 core
+                layout (location = 0) in vec2 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec4 color;
+                
+                uniform mat4 projection;
+                
+                out vec2 texCoords;
+                out vec4 vertexColor;
+                
+                void main() {
+                    texCoords = texCoord;
+                    vertexColor = color;
+                    
+                    gl_Position = projection * vec4(position, 0.0, 1.0);
+                }
+                """;
+    }
+
+    private String getUIFragmentShader() {
+        return """
+                #version 330 core
+                in vec2 texCoords;
+                in vec4 vertexColor;
+                
+                uniform sampler2D uiTexture;
+                uniform bool useTexture;
+                uniform vec4 uniformColor;
+                
+                out vec4 fragColor;
+                
+                void main() {
+                    vec4 finalColor = vertexColor;
+                    
+                    if (useTexture && textureSize(uiTexture, 0).x > 1) {
+                        vec4 texColor = texture(uiTexture, texCoords);
+                        finalColor *= texColor;
+                    }
+                    
+                    if (uniformColor.a > 0.0) {
+                        finalColor *= uniformColor;
+                    }
+                    
+                    fragColor = finalColor;
+                }
+                """;
+    }
+
+    private String getCommonShaderCode() {
+        return """
+                // Camera uniforms
+                uniform vec3 viewPosition;
+                uniform vec3 fogColor;
+                uniform float fogDensity;
+                uniform float time;
+                
+                // Utility functions
+                float calculateFog(vec3 worldPos) {
+                    float distance = length(viewPosition - worldPos);
+                    return exp(-fogDensity * distance);
+                }
+                
+                vec3 applyFog(vec3 color, float fogFactor) {
+                    return mix(fogColor, color, clamp(fogFactor, 0.0, 1.0));
+                }
+                
+                // Noise functions
+                float random(vec2 st) {
+                    return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+                }
+                
+                float noise(vec2 st) {
+                    vec2 i = floor(st);
+                    vec2 f = fract(st);
+                
+                    float a = random(i);
+                    float b = random(i + vec2(1.0, 0.0));
+                    float c = random(i + vec2(0.0, 1.0));
+                    float d = random(i + vec2(1.0, 1.0));
+                
+                    vec2 u = f * f * (3.0 - 2.0 * f);
+                
+                    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+                }
+                """;
+    }
+
+    private String getLightingShaderCode() {
+        return """
+                // Light uniforms
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                uniform vec3 lightDirection;
+                uniform float ambientStrength;
+                uniform float specularStrength;
+                uniform float shininess;
+                
+                vec3 calculateLighting(vec3 worldPos, vec3 normal) {
+                    vec3 norm = normalize(normal);
+                    vec3 lightDir = normalize(lightPosition - worldPos);
+                
+                    // Ambient
+                    vec3 ambient = ambientStrength * lightColor;
+                
+                    // Diffuse
+                    float diff = max(dot(norm, lightDir), 0.0);
+                    vec3 diffuse = diff * lightColor;
+                
+                    // Specular
+                    vec3 viewDir = normalize(viewPosition - worldPos);
+                    vec3 reflectDir = reflect(-lightDir, norm);
+                    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+                    vec3 specular = specularStrength * spec * lightColor;
+                
+                    return ambient + diffuse + specular;
+                }
+                
+                vec3 calculateDirectionalLighting(vec3 worldPos, vec3 normal, vec3 direction) {
+                    vec3 norm = normalize(normal);
+                    vec3 lightDir = normalize(-direction);
+                
+                    // Ambient
+                    vec3 ambient = ambientStrength * lightColor;
+                
+                    // Diffuse
+                    float diff = max(dot(norm, lightDir), 0.0);
+                    vec3 diffuse = diff * lightColor;
+                
+                    // Specular
+                    vec3 viewDir = normalize(viewPosition - worldPos);
+                    vec3 reflectDir = reflect(-lightDir, norm);
+                    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+                    vec3 specular = specularStrength * spec * lightColor;
+                
+                    return ambient + diffuse + specular;
+                }
+                """;
+    }
+
+    /**
+     * Cleanup all resources including shaders
+     */
+    public void cleanup() {
+        try {
+            // Stop file watcher
+            stopFileWatcher();
+
+            // Cleanup all shader programs
+            for (ShaderProgram program : programs.values()) {
+                program.cleanup();
+            }
+            programs.clear();
+
+            // Cleanup individual shaders
+            for (Shader shader : shaders.values()) {
+                shader.cleanup();
+            }
+            shaders.clear();
+
+            // Clear caches
+            shaderSources.clear();
+            lastModified.clear();
+            compilingShaders.clear();
+            fallbackPrograms.clear();
+            reloadListeners.clear();
+
+            System.out.println("Shader manager cleanup completed");
+
+        } catch (Exception e) {
+            System.err.println("Error during shader manager cleanup: " + e.getMessage());
+        }
     }
 }
