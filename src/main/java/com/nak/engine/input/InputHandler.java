@@ -9,9 +9,14 @@ public class InputHandler {
     private long window;
     private Camera camera;
 
-    // Key states for smooth movement
-    private boolean[] keyStates = new boolean[GLFW_KEY_LAST];
-    private boolean[] previousKeyStates = new boolean[GLFW_KEY_LAST];
+    // FIXED: Use proper key range instead of GLFW_KEY_LAST
+    private static final int MIN_KEY = GLFW_KEY_SPACE; // 32
+    private static final int MAX_KEY = GLFW_KEY_LAST;  // 348
+    private static final int KEY_RANGE = MAX_KEY - MIN_KEY + 1;
+
+    // Key states for smooth movement - FIXED size and indexing
+    private boolean[] keyStates = new boolean[KEY_RANGE];
+    private boolean[] previousKeyStates = new boolean[KEY_RANGE];
 
     // Mouse state
     private boolean leftMousePressed = false;
@@ -113,7 +118,7 @@ public class InputHandler {
         // Store previous key states
         System.arraycopy(keyStates, 0, previousKeyStates, 0, keyStates.length);
 
-        // Update current key states
+        // Update current key states - FIXED
         updateKeyStates();
 
         // Process movement modifiers
@@ -129,68 +134,107 @@ public class InputHandler {
         scrollOffset = 0;
     }
 
+    // FIXED: Safe key state updates with proper bounds checking
     private void updateKeyStates() {
-        for (int i = 0; i < keyStates.length; i++) {
-            keyStates[i] = glfwGetKey(window, i) == GLFW_PRESS;
+        // Only check keys in valid range
+        for (int key = MIN_KEY; key <= MAX_KEY; key++) {
+            int index = key - MIN_KEY;
+            if (index >= 0 && index < keyStates.length) {
+                try {
+                    keyStates[index] = glfwGetKey(window, key) == GLFW_PRESS;
+                } catch (Exception e) {
+                    // Skip invalid keys
+                    keyStates[index] = false;
+                }
+            }
         }
+    }
+
+    // FIXED: Helper method to safely check key state
+    private boolean isKeyPressed(int key) {
+        if (key < MIN_KEY || key > MAX_KEY) {
+            return false;
+        }
+        int index = key - MIN_KEY;
+        return index >= 0 && index < keyStates.length && keyStates[index];
+    }
+
+    // FIXED: Helper method to safely check if key was just pressed
+    private boolean wasKeyPressed(int key) {
+        if (key < MIN_KEY || key > MAX_KEY) {
+            return false;
+        }
+        int index = key - MIN_KEY;
+        return index >= 0 && index < keyStates.length &&
+                keyStates[index] && !previousKeyStates[index];
+    }
+
+    // FIXED: Helper method to safely check if key was just released
+    private boolean wasKeyReleased(int key) {
+        if (key < MIN_KEY || key > MAX_KEY) {
+            return false;
+        }
+        int index = key - MIN_KEY;
+        return index >= 0 && index < keyStates.length &&
+                !keyStates[index] && previousKeyStates[index];
     }
 
     private void processMovementModifiers() {
         // Sprint mode (Left Shift)
-        sprintMode = keyStates[GLFW_KEY_LEFT_SHIFT];
+        sprintMode = isKeyPressed(GLFW_KEY_LEFT_SHIFT);
 
         // Walk mode (Left Alt for slower movement)
-        walkMode = keyStates[GLFW_KEY_LEFT_ALT];
+        walkMode = isKeyPressed(GLFW_KEY_LEFT_ALT);
 
         // Crouch mode (Left Control)
-        crouchMode = keyStates[GLFW_KEY_LEFT_CONTROL];
+        crouchMode = isKeyPressed(GLFW_KEY_LEFT_CONTROL);
     }
 
     private void processCameraMovement(float deltaTime) {
         boolean isMoving = false;
 
-        // WASD movement
-        if (keyStates[GLFW_KEY_W]) {
+        // WASD movement - FIXED using safe key checking
+        if (isKeyPressed(GLFW_KEY_W)) {
             camera.moveForward(deltaTime, sprintMode && !walkMode);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_S]) {
+        if (isKeyPressed(GLFW_KEY_S)) {
             camera.moveBackward(deltaTime, sprintMode && !walkMode);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_A]) {
+        if (isKeyPressed(GLFW_KEY_A)) {
             camera.moveLeft(deltaTime, sprintMode && !walkMode);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_D]) {
+        if (isKeyPressed(GLFW_KEY_D)) {
             camera.moveRight(deltaTime, sprintMode && !walkMode);
             isMoving = true;
         }
 
         // Vertical movement
-        if (keyStates[GLFW_KEY_SPACE]) {
+        if (isKeyPressed(GLFW_KEY_SPACE)) {
             camera.moveUp(deltaTime);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_LEFT_SHIFT] && camera.isFlying()) {
+        if (isKeyPressed(GLFW_KEY_LEFT_SHIFT) && camera.isFlying()) {
             camera.moveDown(deltaTime);
             isMoving = true;
         }
 
         // Arrow keys for fine movement
-        if (keyStates[GLFW_KEY_UP]) {
+        if (isKeyPressed(GLFW_KEY_UP)) {
             camera.moveForward(deltaTime * 0.3f, false);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_DOWN]) {
+        if (isKeyPressed(GLFW_KEY_DOWN)) {
             camera.moveBackward(deltaTime * 0.3f, false);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_LEFT]) {
+        if (isKeyPressed(GLFW_KEY_LEFT)) {
             camera.moveLeft(deltaTime * 0.3f, false);
             isMoving = true;
         }
-        if (keyStates[GLFW_KEY_RIGHT]) {
+        if (isKeyPressed(GLFW_KEY_RIGHT)) {
             camera.moveRight(deltaTime * 0.3f, false);
             isMoving = true;
         }
@@ -221,18 +265,18 @@ public class InputHandler {
         }
 
         // Camera sensitivity adjustment
-        if (keyStates[GLFW_KEY_KP_ADD]) {
+        if (isKeyPressed(GLFW_KEY_KP_ADD)) {
             camera.setSensitivity(camera.getSensitivity() + 0.01f);
         }
-        if (keyStates[GLFW_KEY_KP_SUBTRACT]) {
+        if (isKeyPressed(GLFW_KEY_KP_SUBTRACT)) {
             camera.setSensitivity(Math.max(0.01f, camera.getSensitivity() - 0.01f));
         }
 
         // FOV adjustment
-        if (keyStates[GLFW_KEY_EQUAL]) {
+        if (isKeyPressed(GLFW_KEY_EQUAL)) {
             camera.setFov(Math.min(120.0f, camera.getFov() + 30.0f * deltaTime));
         }
-        if (keyStates[GLFW_KEY_MINUS]) {
+        if (isKeyPressed(GLFW_KEY_MINUS)) {
             camera.setFov(Math.max(10.0f, camera.getFov() - 30.0f * deltaTime));
         }
 
@@ -243,39 +287,30 @@ public class InputHandler {
     }
 
     private void handleMousePicking() {
-        // Get mouse position
-        double[] xpos = new double[1];
-        double[] ypos = new double[1];
-        glfwGetCursorPos(window, xpos, ypos);
+        try {
+            // Get mouse position
+            double[] xpos = new double[1];
+            double[] ypos = new double[1];
+            glfwGetCursorPos(window, xpos, ypos);
 
-        // Get window size
-        int[] width = new int[1];
-        int[] height = new int[1];
-        glfwGetWindowSize(window, width, height);
+            // Get window size
+            int[] width = new int[1];
+            int[] height = new int[1];
+            glfwGetWindowSize(window, width, height);
 
-        // Calculate mouse ray
-        Vector3f mouseRay = camera.getMouseRay((float) xpos[0], (float) ypos[0], width[0], height[0]);
+            // Calculate mouse ray
+            Vector3f mouseRay = camera.getMouseRay((float) xpos[0], (float) ypos[0], width[0], height[0]);
 
-        // Perform ray casting (would need terrain collision detection)
-        performRayCast(camera.getPosition(), mouseRay);
+            // Perform ray casting (would need terrain collision detection)
+            performRayCast(camera.getPosition(), mouseRay);
+        } catch (Exception e) {
+            System.err.println("Error in mouse picking: " + e.getMessage());
+        }
     }
 
     private void performRayCast(Vector3f origin, Vector3f direction) {
         // Placeholder for ray casting implementation
-        // In a real application, this would:
-        // 1. Cast ray through terrain chunks
-        // 2. Find intersection point
-        // 3. Trigger appropriate action (place block, select object, etc.)
-
         System.out.println("Ray cast from " + origin + " in direction " + direction);
-    }
-
-    private boolean wasKeyPressed(int key) {
-        return keyStates[key] && !previousKeyStates[key];
-    }
-
-    private boolean wasKeyReleased(int key) {
-        return !keyStates[key] && previousKeyStates[key];
     }
 
     private void toggleMouseLock() {

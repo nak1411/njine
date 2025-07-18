@@ -69,8 +69,9 @@ public class Window {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+//        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+//        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
         // Anti-aliasing
         glfwWindowHint(GLFW_SAMPLES, msaaSamples);
@@ -154,9 +155,18 @@ public class Window {
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);
 
-        // Enable MSAA if available
+        // Check for OpenGL errors after each call
+        checkGLError("After basic setup");
+
+        // MSAA setup with error checking
         if (msaaSamples > 0) {
-            glEnable(GL_MULTISAMPLE);
+            try {
+                glEnable(GL_MULTISAMPLE);
+                checkGLError("After MSAA enable");
+            } catch (Exception e) {
+                System.err.println("MSAA not supported, disabling");
+                msaaSamples = 0;
+            }
         }
 
         // Set clear color
@@ -398,6 +408,21 @@ public class Window {
         vsyncEnabled = !vsyncEnabled;
         glfwSwapInterval(vsyncEnabled ? 1 : 0);
         System.out.println("V-Sync " + (vsyncEnabled ? "enabled" : "disabled"));
+    }
+
+    private void checkGLError(String operation) {
+        int error = glGetError();
+        if (error != GL_NO_ERROR) {
+            String errorString;
+            switch (error) {
+                case GL_INVALID_ENUM: errorString = "GL_INVALID_ENUM"; break;
+                case GL_INVALID_VALUE: errorString = "GL_INVALID_VALUE"; break;
+                case GL_INVALID_OPERATION: errorString = "GL_INVALID_OPERATION"; break;
+                case GL_OUT_OF_MEMORY: errorString = "GL_OUT_OF_MEMORY"; break;
+                default: errorString = "Unknown error " + error; break;
+            }
+            throw new RuntimeException("OpenGL error during " + operation + ": " + errorString);
+        }
     }
 
     private void cleanup() {
