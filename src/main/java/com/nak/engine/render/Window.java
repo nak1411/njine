@@ -1,10 +1,12 @@
 package com.nak.engine.render;
 
+import com.nak.engine.debug.TerrainDebugUtility;
 import com.nak.engine.entity.Camera;
 import com.nak.engine.input.InputHandler;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.GL;
@@ -49,6 +51,10 @@ public class Window {
     private Matrix4f projectionMatrix;
     private FloatBuffer matrixBuffer;
     private TerrainManager terrainManager;
+
+    private TerrainDebugUtility.TerrainLoadMonitor terrainMonitor;
+    private boolean terrainDebugEnabled = false;
+    private long lastTerrainDebugTime = 0;
 
     // Rendering settings
     private boolean vsyncEnabled = true;
@@ -204,8 +210,17 @@ public class Window {
         renderer = new MasterRenderer(terrainManager);
         inputHandler = new InputHandler(window, camera);
 
+        // Initialize terrain debugging
+        terrainMonitor = new TerrainDebugUtility.TerrainLoadMonitor();
+        terrainDebugEnabled = Boolean.parseBoolean(System.getProperty("terrain.debug", "false"));
+
         System.out.println("Game components initialized");
         System.out.println(inputHandler.getControlsHelp());
+
+        // Run initial terrain diagnostics
+        if (terrainDebugEnabled) {
+            TerrainDebugUtility.debugTerrainSystem(terrainManager, camera.getPosition());
+        }
     }
 
     public void run() {
@@ -279,8 +294,34 @@ public class Window {
         // Update camera
         camera.update(deltaTime);
 
-        // Update terrain with camera position
-        terrainManager.update(camera.getPosition(), deltaTime);
+        // Update terrain with camera position and debug monitoring
+        Vector3f cameraPos = camera.getPosition();
+
+        // Validate camera position before updating terrain
+        if (!Float.isFinite(cameraPos.x) || !Float.isFinite(cameraPos.y) || !Float.isFinite(cameraPos.z)) {
+            System.err.println("WARNING: Invalid camera position detected: " + cameraPos);
+            cameraPos.set(0, 10, 3); // Reset to safe position
+            camera.setPosition(cameraPos);
+        }
+
+        try {
+            terrainManager.update(cameraPos, deltaTime);
+        } catch (Exception e) {
+            System.err.println("Error updating terrain: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        // Monitor terrain loading progress
+        if (terrainDebugEnabled) {
+            terrainMonitor.update(terrainManager);
+
+            // Periodic detailed diagnostics
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastTerrainDebugTime > 10000) { // Every 10 seconds
+                TerrainDebugUtility.diagnoseCommonIssues(terrainManager, cameraPos);
+                lastTerrainDebugTime = currentTime;
+            }
+        }
 
         // Handle special input commands
         handleSpecialCommands();
@@ -303,6 +344,40 @@ public class Window {
                 glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
             toggleVSync();
         }
+
+        // Toggle terrain debugging
+        if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS) {
+            toggleTerrainDebug();
+        }
+
+        // Run terrain stress test
+        if (glfwGetKey(window, GLFW_KEY_F6) == GLFW_PRESS &&
+                glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+            runTerrainStressTest();
+        }
+
+        // Test terrain height generation
+        if (glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS) {
+            testTerrainHeight();
+        }
+    }
+
+    private void toggleTerrainDebug() {
+        terrainDebugEnabled = !terrainDebugEnabled;
+        System.out.println("Terrain debugging " + (terrainDebugEnabled ? "enabled" : "disabled"));
+
+        if (terrainDebugEnabled) {
+            TerrainDebugUtility.debugTerrainSystem(terrainManager, camera.getPosition());
+        }
+    }
+
+    private void runTerrainStressTest() {
+        System.out.println("Running terrain stress test...");
+        TerrainDebugUtility.stressTest(terrainManager);
+    }
+
+    private void testTerrainHeight() {
+        TerrainDebugUtility.testHeightGeneration(terrainManager);
     }
 
     private void render(float interpolation) {
@@ -343,9 +418,16 @@ public class Window {
         glPushMatrix();
         glLoadIdentity();
 
-        // Render performance info (simple text rendering would need font system)
-        // For now, we'll just update the window title with debug info
+        // Update debug title with terrain info
         updateDebugTitle();
+
+        // Print debug info to console if terrain debugging is enabled
+        if (terrainDebugEnabled && System.currentTimeMillis() % 5000 < 100) { // Every 5 seconds, briefly
+            System.out.println("=== DEBUG INFO ===");
+            System.out.println("Camera: " + camera.getPosition());
+            System.out.println(terrainManager.getPerformanceInfo());
+            System.out.println("==================");
+        }
 
         // Restore 3D rendering
         glPopMatrix();
@@ -356,14 +438,23 @@ public class Window {
     }
 
     private void updateDebugTitle() {
+        String terrainInfo = "";
+        if (terrainDebugEnabled) {
+            terrainInfo = String.format(" | Terrain: A=%d V=%d R=%d",
+                    terrainManager.getActiveChunkCount(),
+                    terrainManager.getVisibleChunkCount(),
+                    terrainManager.getChunksRendered());
+        }
+
         String title = String.format(
-                "Enhanced Terrain Engine - FPS: %d, UPS: %d, Avg: %.2fms, Max: %.2fms, Pos: %.1f,%.1f,%.1f",
+                "Enhanced Terrain Engine - FPS: %d, UPS: %d, Avg: %.2fms, Max: %.2fms, Pos: %.1f,%.1f,%.1f%s",
                 fps, ups,
                 (totalFrameTime / Math.max(1, frameCount)) / 1_000_000.0,
                 maxFrameTime / 1_000_000.0,
                 camera.getPosition().x,
                 camera.getPosition().y,
-                camera.getPosition().z
+                camera.getPosition().z,
+                terrainInfo
         );
         glfwSetWindowTitle(window, title);
     }

@@ -2,7 +2,7 @@ plugins {
     id 'java'
 }
 
-project.ext.lwjglVersion = "3.3.4"
+project.ext.lwjglVersion = "3.3.6"
 project.ext.jomlVersion = "1.10.7"
 project.ext.lwjglNatives = "natives-windows"
 

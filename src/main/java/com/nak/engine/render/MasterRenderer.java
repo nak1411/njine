@@ -5,9 +5,9 @@ import com.nak.engine.entity.Camera;
 import com.nak.engine.shader.ShaderManager;
 import com.nak.engine.shader.ShaderProgram;
 import com.nak.engine.shader.ShaderReloadListener;
-import com.nak.engine.util.ShaderUtils;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;
+import com.nak.engine.util.ShaderUtils;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
@@ -106,97 +106,97 @@ public class MasterRenderer implements ShaderReloadListener {
     private void loadBasicShaders() {
         // Create a simple terrain shader without includes
         String simpleTerrainVert = """
-            #version 330 core
-            
-            layout (location = 0) in vec3 position;
-            layout (location = 1) in vec2 texCoord;
-            layout (location = 2) in vec3 normal;
-            layout (location = 3) in vec3 tangent;
-            layout (location = 4) in vec3 color;
-            
-            uniform mat4 projectionMatrix;
-            uniform mat4 viewMatrix;
-            uniform mat4 modelMatrix;
-            uniform mat4 lightSpaceMatrix;
-            
-            out vec3 fragPos;
-            out vec2 texCoords;
-            out vec3 fragNormal;
-            out vec3 fragTangent;
-            out vec3 vertexColor;
-            out vec4 fragPosLightSpace;
-            out float height;
-            
-            void main() {
-                vec4 worldPos = modelMatrix * vec4(position, 1.0);
-                fragPos = worldPos.xyz;
-                texCoords = texCoord;
-                fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
-                fragTangent = mat3(transpose(inverse(modelMatrix))) * tangent;
-                vertexColor = color;
-                fragPosLightSpace = lightSpaceMatrix * worldPos;
-                height = position.y;
-            
-                gl_Position = projectionMatrix * viewMatrix * worldPos;
-            }
-            """;
+                #version 330 core
+                
+                layout (location = 0) in vec3 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec3 normal;
+                layout (location = 3) in vec3 tangent;
+                layout (location = 4) in vec3 color;
+                
+                uniform mat4 projectionMatrix;
+                uniform mat4 viewMatrix;
+                uniform mat4 modelMatrix;
+                uniform mat4 lightSpaceMatrix;
+                
+                out vec3 fragPos;
+                out vec2 texCoords;
+                out vec3 fragNormal;
+                out vec3 fragTangent;
+                out vec3 vertexColor;
+                out vec4 fragPosLightSpace;
+                out float height;
+                
+                void main() {
+                    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                    fragPos = worldPos.xyz;
+                    texCoords = texCoord;
+                    fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
+                    fragTangent = mat3(transpose(inverse(modelMatrix))) * tangent;
+                    vertexColor = color;
+                    fragPosLightSpace = lightSpaceMatrix * worldPos;
+                    height = position.y;
+                
+                    gl_Position = projectionMatrix * viewMatrix * worldPos;
+                }
+                """;
 
         String simpleTerrainFrag = """
-            #version 330 core
-            
-            in vec3 fragPos;
-            in vec2 texCoords;
-            in vec3 fragNormal;
-            in vec3 fragTangent;
-            in vec3 vertexColor;
-            in vec4 fragPosLightSpace;
-            in float height;
-            
-            uniform vec3 lightPosition;
-            uniform vec3 lightColor;
-            uniform vec3 lightDirection;
-            uniform float ambientStrength;
-            uniform float specularStrength;
-            uniform float shininess;
-            uniform vec3 viewPosition;
-            uniform vec3 fogColor;
-            uniform float fogDensity;
-            
-            out vec4 fragColor;
-            
-            vec3 calculateLighting() {
-                vec3 norm = normalize(fragNormal);
-                vec3 lightDir = normalize(lightPosition - fragPos);
-            
-                // Ambient
-                vec3 ambient = ambientStrength * lightColor;
-            
-                // Diffuse
-                float diff = max(dot(norm, lightDir), 0.0);
-                vec3 diffuse = diff * lightColor;
-            
-                // Specular
-                vec3 viewDir = normalize(viewPosition - fragPos);
-                vec3 reflectDir = reflect(-lightDir, norm);
-                float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-                vec3 specular = specularStrength * spec * lightColor;
-            
-                return ambient + diffuse + specular;
-            }
-            
-            void main() {
-                vec3 lighting = calculateLighting();
-                vec3 finalColor = vertexColor * lighting;
-            
-                // Apply fog
-                float distance = length(viewPosition - fragPos);
-                float fogFactor = exp(-fogDensity * distance);
-                fogFactor = clamp(fogFactor, 0.0, 1.0);
-                finalColor = mix(fogColor, finalColor, fogFactor);
-            
-                fragColor = vec4(finalColor, 1.0);
-            }
-            """;
+                #version 330 core
+                
+                in vec3 fragPos;
+                in vec2 texCoords;
+                in vec3 fragNormal;
+                in vec3 fragTangent;
+                in vec3 vertexColor;
+                in vec4 fragPosLightSpace;
+                in float height;
+                
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                uniform vec3 lightDirection;
+                uniform float ambientStrength;
+                uniform float specularStrength;
+                uniform float shininess;
+                uniform vec3 viewPosition;
+                uniform vec3 fogColor;
+                uniform float fogDensity;
+                
+                out vec4 fragColor;
+                
+                vec3 calculateLighting() {
+                    vec3 norm = normalize(fragNormal);
+                    vec3 lightDir = normalize(lightPosition - fragPos);
+                
+                    // Ambient
+                    vec3 ambient = ambientStrength * lightColor;
+                
+                    // Diffuse
+                    float diff = max(dot(norm, lightDir), 0.0);
+                    vec3 diffuse = diff * lightColor;
+                
+                    // Specular
+                    vec3 viewDir = normalize(viewPosition - fragPos);
+                    vec3 reflectDir = reflect(-lightDir, norm);
+                    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+                    vec3 specular = specularStrength * spec * lightColor;
+                
+                    return ambient + diffuse + specular;
+                }
+                
+                void main() {
+                    vec3 lighting = calculateLighting();
+                    vec3 finalColor = vertexColor * lighting;
+                
+                    // Apply fog
+                    float distance = length(viewPosition - fragPos);
+                    float fogFactor = exp(-fogDensity * distance);
+                    fogFactor = clamp(fogFactor, 0.0, 1.0);
+                    finalColor = mix(fogColor, finalColor, fogFactor);
+                
+                    fragColor = vec4(finalColor, 1.0);
+                }
+                """;
 
         try {
             shaderManager.createProgram("terrain", simpleTerrainVert, simpleTerrainFrag);
@@ -347,92 +347,145 @@ public class MasterRenderer implements ShaderReloadListener {
 
     private void renderTerrainWithProperLighting(Camera camera) {
         ShaderProgram terrainProgram = shaderManager.getProgram("terrain");
-        if (terrainProgram != null && terrainProgram.isLinked()) {
 
+        // Check if we have terrain to render
+        if (terrainManager.getVisibleChunkCount() == 0) {
+            // Try to render without shader as fallback
+            renderTerrainFallback();
+            return;
+        }
+
+        if (terrainProgram != null && terrainProgram.isLinked()) {
             // Clear any existing OpenGL errors
             while (GL11.glGetError() != GL11.GL_NO_ERROR) {
                 // Clear error queue
             }
 
-            terrainProgram.bind();
-
-            // Check if binding succeeded
-            int error = GL11.glGetError();
-            if (error != GL11.GL_NO_ERROR) {
-                System.err.println("Error binding terrain shader: " + error);
-                terrainProgram.unbind();
-                return;
-            }
-
-            // Set uniforms safely - only set ones that exist
             try {
-                // Camera uniforms
-                if (terrainProgram.hasUniform("projectionMatrix")) {
-                    terrainProgram.setUniform("projectionMatrix", projectionMatrix);
-                }
-                if (terrainProgram.hasUniform("viewMatrix")) {
-                    terrainProgram.setUniform("viewMatrix", viewMatrix);
-                }
-                if (terrainProgram.hasUniform("modelMatrix")) {
-                    terrainProgram.setUniform("modelMatrix", modelMatrix);
-                }
-                if (terrainProgram.hasUniform("viewPosition")) {
-                    terrainProgram.setUniform("viewPosition", camera.getPosition());
+                terrainProgram.bind();
+
+                // Check if binding succeeded
+                int error = GL11.glGetError();
+                if (error != GL11.GL_NO_ERROR) {
+                    System.err.println("Error binding terrain shader: " + error);
+                    terrainProgram.unbind();
+                    renderTerrainFallback();
+                    return;
                 }
 
-                // Lighting uniforms
-                if (terrainProgram.hasUniform("lightPosition")) {
-                    terrainProgram.setUniform("lightPosition", lightPosition);
-                }
-                if (terrainProgram.hasUniform("lightColor")) {
-                    terrainProgram.setUniform("lightColor", sunColor);
-                }
-                if (terrainProgram.hasUniform("lightDirection")) {
-                    terrainProgram.setUniform("lightDirection", sunDirection);
-                }
-                if (terrainProgram.hasUniform("ambientStrength")) {
-                    terrainProgram.setUniform("ambientStrength", ambientStrength);
-                }
-                if (terrainProgram.hasUniform("specularStrength")) {
-                    terrainProgram.setUniform("specularStrength", specularStrength);
-                }
-                if (terrainProgram.hasUniform("shininess")) {
-                    terrainProgram.setUniform("shininess", shininess);
-                }
-
-                // Fog uniforms
-                if (terrainProgram.hasUniform("fogColor")) {
-                    terrainProgram.setUniform("fogColor", fogColor);
-                }
-                if (terrainProgram.hasUniform("fogDensity")) {
-                    terrainProgram.setUniform("fogDensity", fogDensity);
-                }
-
-                // Light space matrix (for shadows)
-                if (terrainProgram.hasUniform("lightSpaceMatrix")) {
-                    Matrix4f lightSpaceMatrix = new Matrix4f().identity();
-                    terrainProgram.setUniform("lightSpaceMatrix", lightSpaceMatrix);
-                }
+                // Set uniforms safely - only set ones that exist
+                setupTerrainUniforms(terrainProgram, camera);
 
                 // Check for errors after setting uniforms
                 error = GL11.glGetError();
                 if (error != GL11.GL_NO_ERROR) {
                     System.err.println("Error setting terrain uniforms: " + error);
-                } else {
-                    // Only render if no errors
-                    terrainManager.render();
+                    terrainProgram.unbind();
+                    renderTerrainFallback();
+                    return;
                 }
 
-            } catch (Exception e) {
-                System.err.println("Exception setting terrain uniforms: " + e.getMessage());
-            }
+                // Render terrain chunks
+                terrainManager.render();
 
-            terrainProgram.unbind();
+                // Check for rendering errors
+                error = GL11.glGetError();
+                if (error != GL11.GL_NO_ERROR) {
+                    System.err.println("Error rendering terrain: " + error);
+                }
+
+                terrainProgram.unbind();
+
+            } catch (Exception e) {
+                System.err.println("Exception in terrain rendering: " + e.getMessage());
+                e.printStackTrace();
+
+                if (terrainProgram.isInUse()) {
+                    terrainProgram.unbind();
+                }
+
+                renderTerrainFallback();
+            }
 
         } else {
             System.err.println("No valid terrain shader available for rendering!");
-            // Fallback to legacy rendering without shader
+            renderTerrainFallback();
+        }
+    }
+
+    private void setupTerrainUniforms(ShaderProgram terrainProgram, Camera camera) {
+        // Camera uniforms
+        if (terrainProgram.hasUniform("projectionMatrix")) {
+            terrainProgram.setUniform("projectionMatrix", projectionMatrix);
+        }
+        if (terrainProgram.hasUniform("viewMatrix")) {
+            terrainProgram.setUniform("viewMatrix", viewMatrix);
+        }
+        if (terrainProgram.hasUniform("modelMatrix")) {
+            terrainProgram.setUniform("modelMatrix", modelMatrix);
+        }
+        if (terrainProgram.hasUniform("viewPosition")) {
+            terrainProgram.setUniform("viewPosition", camera.getPosition());
+        }
+
+        // Lighting uniforms
+        if (terrainProgram.hasUniform("lightPosition")) {
+            terrainProgram.setUniform("lightPosition", lightPosition);
+        }
+        if (terrainProgram.hasUniform("lightColor")) {
+            terrainProgram.setUniform("lightColor", sunColor);
+        }
+        if (terrainProgram.hasUniform("lightDirection")) {
+            terrainProgram.setUniform("lightDirection", sunDirection);
+        }
+        if (terrainProgram.hasUniform("ambientStrength")) {
+            terrainProgram.setUniform("ambientStrength", ambientStrength);
+        }
+        if (terrainProgram.hasUniform("specularStrength")) {
+            terrainProgram.setUniform("specularStrength", specularStrength);
+        }
+        if (terrainProgram.hasUniform("shininess")) {
+            terrainProgram.setUniform("shininess", shininess);
+        }
+
+        // Fog uniforms
+        if (terrainProgram.hasUniform("fogColor")) {
+            terrainProgram.setUniform("fogColor", fogColor);
+        }
+        if (terrainProgram.hasUniform("fogDensity")) {
+            terrainProgram.setUniform("fogDensity", fogDensity);
+        }
+
+        // Light space matrix (for shadows)
+        if (terrainProgram.hasUniform("lightSpaceMatrix")) {
+            Matrix4f lightSpaceMatrix = new Matrix4f().identity();
+            terrainProgram.setUniform("lightSpaceMatrix", lightSpaceMatrix);
+        }
+
+        // Texture scale
+        if (terrainProgram.hasUniform("textureScale")) {
+            terrainProgram.setUniform("textureScale", 16.0f);
+        }
+
+        // Shadow bias
+        if (terrainProgram.hasUniform("shadowBias")) {
+            terrainProgram.setUniform("shadowBias", 0.005f);
+        }
+    }
+
+    private void renderTerrainFallback() {
+        // Simple fallback rendering without shaders
+        try {
+            glDisable(GL_LIGHTING);
+            glColor3f(0.3f, 0.6f, 0.2f); // Green color
+
+            // Render terrain manager
             terrainManager.render();
+
+            glEnable(GL_LIGHTING);
+
+        } catch (Exception e) {
+            System.err.println("Error in terrain fallback rendering: " + e.getMessage());
         }
     }
 

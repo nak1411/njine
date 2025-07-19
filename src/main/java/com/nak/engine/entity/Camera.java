@@ -58,7 +58,7 @@ public class Camera {
     private boolean enableBob = true;
 
     public Camera() {
-        this.position = new Vector3f(0.0f, 10.0f, 3.0f);
+        this.position = new Vector3f(0.0f, 100.0f, 3.0f);
         this.worldUp = new Vector3f(0.0f, 1.0f, 0.0f);
         this.front = new Vector3f(0.0f, 0.0f, -1.0f);
         this.up = new Vector3f();

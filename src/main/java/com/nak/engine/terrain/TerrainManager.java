@@ -11,14 +11,13 @@ public class TerrainManager {
     private static final float BASE_CHUNK_SIZE = 64.0f;
     private static final int MAX_LOD_LEVEL = 4;
     private static final float UPDATE_THRESHOLD = 8.0f;
-    private static final int MAX_VISIBLE_CHUNKS = 100;
-    private static final int MAX_BUFFER_UPDATES_PER_FRAME = 3;
+    private static final int MAX_VISIBLE_CHUNKS = 50; // Reduced for stability
+    private static final int MAX_BUFFER_UPDATES_PER_FRAME = 2; // Reduced for stability
 
     // Terrain data structures
     private final Map<String, TerrainChunk> activeChunks;
     private final Set<TerrainChunk> visibleChunks;
     private final Queue<TerrainChunk> bufferUpdateQueue;
-    private final TerrainQuadTree quadTree;
 
     // Camera tracking
     private Vector3f lastCameraPos;
@@ -33,190 +32,310 @@ public class TerrainManager {
     private long lastUpdateTime = 0;
 
     // Culling parameters
-    private float viewDistance = 400.0f;
+    private float viewDistance = 300.0f; // Reduced for stability
     private float nearPlane = 0.1f;
     private float farPlane = 1000.0f;
     private float fov = 60.0f;
 
+    // Safety flags
+    private boolean initialized = false;
+    private final Object updateLock = new Object();
+
     public TerrainManager() {
         this.activeChunks = new ConcurrentHashMap<>();
-        this.visibleChunks = new HashSet<>();
+        this.visibleChunks = Collections.synchronizedSet(new HashSet<>());
         this.bufferUpdateQueue = new LinkedList<>();
-        this.quadTree = new TerrainQuadTree(new Vector3f(0, 0, 0), WORLD_SIZE);
         this.lastCameraPos = new Vector3f();
         this.currentCameraPos = new Vector3f();
         this.cameraVelocity = new Vector3f();
+
+        // Initialize with some basic chunks around origin
+        initializeBasicTerrain();
+        this.initialized = true;
+
+        System.out.println("TerrainManager initialized with view distance: " + viewDistance);
+    }
+
+    private void initializeBasicTerrain() {
+        // Create a small grid of chunks around the origin for immediate rendering
+        int gridSize = 3; // 3x3 grid
+        float chunkSize = BASE_CHUNK_SIZE;
+
+        for (int x = -gridSize/2; x <= gridSize/2; x++) {
+            for (int z = -gridSize/2; z <= gridSize/2; z++) {
+                Vector3f position = new Vector3f(x * chunkSize, 0, z * chunkSize);
+                String chunkKey = getChunkKey(position, 0);
+
+                TerrainChunk chunk = new TerrainChunk(position, chunkSize, 0);
+                activeChunks.put(chunkKey, chunk);
+
+                // Generate synchronously for immediate availability
+                chunk.generate();
+                chunk.setVisible(true);
+                visibleChunks.add(chunk);
+                bufferUpdateQueue.offer(chunk);
+                chunksGenerated++;
+            }
+        }
+
+        System.out.println("Initialized " + activeChunks.size() + " basic terrain chunks");
     }
 
     /**
      * Update terrain based on camera position and movement
      */
     public void update(Vector3f cameraPos, float deltaTime) {
-        updateCameraTracking(cameraPos, deltaTime);
-
-        // Only perform expensive updates if camera moved significantly
-        if (shouldUpdateTerrain()) {
-            updateTerrainLOD();
-            updateChunkVisibility();
-            processBufferUpdates();
-            lastCameraPos.set(currentCameraPos);
-        } else {
-            // Still process buffer updates even if camera didn't move much
-            processBufferUpdates();
+        if (!initialized || cameraPos == null) {
+            return;
         }
 
-        updatePerformanceMetrics();
+        synchronized (updateLock) {
+            try {
+                updateCameraTracking(cameraPos, deltaTime);
+
+                // Only perform expensive updates if camera moved significantly
+                if (shouldUpdateTerrain()) {
+                    updateTerrainLOD();
+                    updateChunkVisibility();
+                    lastCameraPos.set(currentCameraPos);
+                }
+
+                // Always process buffer updates
+                processBufferUpdates();
+                updatePerformanceMetrics();
+
+            } catch (Exception e) {
+                System.err.println("Error in terrain update: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
     }
 
     private void updateCameraTracking(Vector3f cameraPos, float deltaTime) {
         currentCameraPos.set(cameraPos);
 
         // Calculate camera velocity for predictive loading
-        if (deltaTime > 0) {
+        if (deltaTime > 0 && deltaTime < 1.0f) { // Sanity check deltaTime
             cameraVelocity.set(currentCameraPos).sub(lastCameraPos).div(deltaTime);
             cameraSpeed = cameraVelocity.length();
         }
     }
 
     private boolean shouldUpdateTerrain() {
-        return currentCameraPos.distance(lastCameraPos) > UPDATE_THRESHOLD ||
-                System.currentTimeMillis() - lastUpdateTime > 1000; // Force update every second
+        float distance = currentCameraPos.distance(lastCameraPos);
+        long timeSinceUpdate = System.currentTimeMillis() - lastUpdateTime;
+
+        return distance > UPDATE_THRESHOLD || timeSinceUpdate > 2000; // Force update every 2 seconds
     }
 
     private void updateTerrainLOD() {
-        // Clear visibility for fresh calculation
-        visibleChunks.clear();
+        try {
+            // Simple grid-based chunk loading around camera
+            float chunkSize = BASE_CHUNK_SIZE;
+            int loadRadius = (int) Math.ceil(viewDistance / chunkSize);
 
-        // Update quadtree with current camera position
-        quadTree.update(currentCameraPos, viewDistance, this::onChunkNeeded);
+            // Calculate camera chunk position
+            int cameraChunkX = (int) Math.floor(currentCameraPos.x / chunkSize);
+            int cameraChunkZ = (int) Math.floor(currentCameraPos.z / chunkSize);
 
-        // Predictive loading based on camera movement
-        if (cameraSpeed > 5.0f) {
-            predictiveChunkLoading();
+            // Load chunks in a grid around camera
+            for (int x = cameraChunkX - loadRadius; x <= cameraChunkX + loadRadius; x++) {
+                for (int z = cameraChunkZ - loadRadius; z <= cameraChunkZ + loadRadius; z++) {
+                    Vector3f chunkPos = new Vector3f(x * chunkSize, 0, z * chunkSize);
+                    float distanceToCamera = currentCameraPos.distance(
+                            new Vector3f(chunkPos.x + chunkSize/2, 0, chunkPos.z + chunkSize/2)
+                    );
+
+                    if (distanceToCamera < viewDistance) {
+                        int lodLevel = calculateLODLevel(distanceToCamera);
+                        onChunkNeeded(chunkPos, chunkSize, lodLevel);
+                    }
+                }
+            }
+
+            // Cleanup distant chunks
+            cleanupDistantChunks();
+
+        } catch (Exception e) {
+            System.err.println("Error in updateTerrainLOD: " + e.getMessage());
         }
-
-        // Cleanup distant chunks
-        cleanupDistantChunks();
     }
 
-    private void predictiveChunkLoading() {
-        // Load chunks in the direction of camera movement
-        Vector3f predictedPos = new Vector3f(currentCameraPos)
-                .add(new Vector3f(cameraVelocity).mul(2.0f)); // Predict 2 seconds ahead
-
-        quadTree.updatePredictive(predictedPos, viewDistance * 0.7f, this::onChunkNeeded);
+    private int calculateLODLevel(float distance) {
+        if (distance < 100) return 0;
+        if (distance < 200) return 1;
+        if (distance < 300) return 2;
+        return Math.min(3, MAX_LOD_LEVEL);
     }
 
     private void onChunkNeeded(Vector3f position, float size, int level) {
-        String chunkKey = getChunkKey(position, level);
+        try {
+            String chunkKey = getChunkKey(position, level);
 
-        TerrainChunk chunk = activeChunks.get(chunkKey);
-        if (chunk == null) {
-            // Create new chunk
-            chunk = new TerrainChunk(position, size, level);
-            activeChunks.put(chunkKey, chunk);
-
-            // Start generation asynchronously
-            TerrainChunk finalChunk = chunk;
-            chunk.generateAsync().thenRun(() -> {
-                if (finalChunk.isGenerated()) {
-                    bufferUpdateQueue.offer(finalChunk);
+            TerrainChunk chunk = activeChunks.get(chunkKey);
+            if (chunk == null) {
+                // Limit total chunks to prevent memory issues
+                if (activeChunks.size() >= MAX_VISIBLE_CHUNKS * 2) {
+                    return;
                 }
-            });
 
-            chunksGenerated++;
-        }
+                // Create new chunk
+                chunk = new TerrainChunk(position, size, level);
+                activeChunks.put(chunkKey, chunk);
 
-        // Mark as visible if in range
-        float distance = currentCameraPos.distance(
-                new Vector3f(position.x + size / 2, 0, position.z + size / 2)
-        );
+                // Start generation asynchronously
+                TerrainChunk finalChunk = chunk;
+                chunk.generateAsync().thenRun(() -> {
+                    if (finalChunk.isGenerated()) {
+                        synchronized (bufferUpdateQueue) {
+                            bufferUpdateQueue.offer(finalChunk);
+                        }
+                    }
+                });
 
-        if (distance < viewDistance) {
-            visibleChunks.add(chunk);
-            chunk.setVisible(true);
+                chunksGenerated++;
+            }
+
+            // Mark as visible if in range
+            float distance = currentCameraPos.distance(
+                    new Vector3f(position.x + size / 2, 0, position.z + size / 2)
+            );
+
+            if (distance < viewDistance) {
+                synchronized (visibleChunks) {
+                    visibleChunks.add(chunk);
+                }
+                chunk.setVisible(true);
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error in onChunkNeeded: " + e.getMessage());
         }
     }
 
     private void updateChunkVisibility() {
-        // Frustum culling for all active chunks
-        for (TerrainChunk chunk : activeChunks.values()) {
-            if (chunk.isGenerated()) {
-                boolean inFrustum = chunk.isInFrustum(
-                        currentCameraPos,
-                        getCameraFront(),
-                        fov,
-                        farPlane,
-                        nearPlane
-                );
+        try {
+            List<TerrainChunk> chunksToRemove = new ArrayList<>();
 
-                if (inFrustum && visibleChunks.contains(chunk)) {
-                    chunk.setVisible(true);
-                    if (chunk.needsBufferUpdate()) {
-                        bufferUpdateQueue.offer(chunk);
+            synchronized (visibleChunks) {
+                // Frustum culling for all visible chunks
+                for (TerrainChunk chunk : visibleChunks) {
+                    if (chunk.isGenerated()) {
+                        boolean inFrustum = chunk.isInFrustum(
+                                currentCameraPos,
+                                getCameraFront(),
+                                fov,
+                                farPlane,
+                                nearPlane
+                        );
+
+                        float distance = currentCameraPos.distance(chunk.getPosition());
+
+                        if (inFrustum && distance < viewDistance) {
+                            chunk.setVisible(true);
+                            if (chunk.needsBufferUpdate()) {
+                                synchronized (bufferUpdateQueue) {
+                                    bufferUpdateQueue.offer(chunk);
+                                }
+                            }
+                        } else {
+                            chunk.setVisible(false);
+                            if (distance > viewDistance * 1.5f) {
+                                chunksToRemove.add(chunk);
+                            }
+                        }
                     }
-                } else {
-                    chunk.setVisible(false);
+                }
+
+                // Remove distant chunks from visible set
+                visibleChunks.removeAll(chunksToRemove);
+            }
+
+            // Limit visible chunks to prevent performance issues
+            synchronized (visibleChunks) {
+                if (visibleChunks.size() > MAX_VISIBLE_CHUNKS) {
+                    limitVisibleChunks();
                 }
             }
-        }
 
-        // Limit visible chunks to prevent performance issues
-        if (visibleChunks.size() > MAX_VISIBLE_CHUNKS) {
-            limitVisibleChunks();
+        } catch (Exception e) {
+            System.err.println("Error in updateChunkVisibility: " + e.getMessage());
         }
     }
 
     private void limitVisibleChunks() {
-        // Sort by distance and keep only the closest chunks
-        List<TerrainChunk> sortedChunks = new ArrayList<>(visibleChunks);
-        sortedChunks.sort((a, b) -> {
-            float distA = currentCameraPos.distance(a.getPosition());
-            float distB = currentCameraPos.distance(b.getPosition());
-            return Float.compare(distA, distB);
-        });
+        try {
+            // Sort by distance and keep only the closest chunks
+            List<TerrainChunk> sortedChunks;
+            synchronized (visibleChunks) {
+                sortedChunks = new ArrayList<>(visibleChunks);
+            }
 
-        visibleChunks.clear();
-        for (int i = 0; i < Math.min(MAX_VISIBLE_CHUNKS, sortedChunks.size()); i++) {
-            visibleChunks.add(sortedChunks.get(i));
-        }
+            sortedChunks.sort((a, b) -> {
+                float distA = currentCameraPos.distance(a.getPosition());
+                float distB = currentCameraPos.distance(b.getPosition());
+                return Float.compare(distA, distB);
+            });
 
-        // Hide chunks that were culled
-        for (int i = MAX_VISIBLE_CHUNKS; i < sortedChunks.size(); i++) {
-            sortedChunks.get(i).setVisible(false);
+            synchronized (visibleChunks) {
+                visibleChunks.clear();
+                for (int i = 0; i < Math.min(MAX_VISIBLE_CHUNKS, sortedChunks.size()); i++) {
+                    visibleChunks.add(sortedChunks.get(i));
+                }
+            }
+
+            // Hide chunks that were culled
+            for (int i = MAX_VISIBLE_CHUNKS; i < sortedChunks.size(); i++) {
+                sortedChunks.get(i).setVisible(false);
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error in limitVisibleChunks: " + e.getMessage());
         }
     }
 
     private void processBufferUpdates() {
         bufferUpdatesThisFrame = 0;
 
-        while (!bufferUpdateQueue.isEmpty() &&
-                bufferUpdatesThisFrame < MAX_BUFFER_UPDATES_PER_FRAME) {
+        try {
+            synchronized (bufferUpdateQueue) {
+                while (!bufferUpdateQueue.isEmpty() &&
+                        bufferUpdatesThisFrame < MAX_BUFFER_UPDATES_PER_FRAME) {
 
-            TerrainChunk chunk = bufferUpdateQueue.poll();
-            if (chunk != null && chunk.isGenerated() && !chunk.areBuffersCreated()) {
-                chunk.createBuffers();
-                bufferUpdatesThisFrame++;
+                    TerrainChunk chunk = bufferUpdateQueue.poll();
+                    if (chunk != null && chunk.isGenerated() && !chunk.areBuffersCreated()) {
+                        chunk.createBuffers();
+                        bufferUpdatesThisFrame++;
+                    }
+                }
             }
+        } catch (Exception e) {
+            System.err.println("Error in processBufferUpdates: " + e.getMessage());
         }
     }
 
     private void cleanupDistantChunks() {
-        Iterator<Map.Entry<String, TerrainChunk>> iterator =
-                activeChunks.entrySet().iterator();
+        try {
+            Iterator<Map.Entry<String, TerrainChunk>> iterator =
+                    activeChunks.entrySet().iterator();
 
-        while (iterator.hasNext()) {
-            Map.Entry<String, TerrainChunk> entry = iterator.next();
-            TerrainChunk chunk = entry.getValue();
+            while (iterator.hasNext()) {
+                Map.Entry<String, TerrainChunk> entry = iterator.next();
+                TerrainChunk chunk = entry.getValue();
 
-            float distance = currentCameraPos.distance(chunk.getPosition());
+                float distance = currentCameraPos.distance(chunk.getPosition());
 
-            // Remove chunks that are very far away
-            if (distance > viewDistance * 2.0f) {
-                chunk.cleanup();
-                iterator.remove();
-                visibleChunks.remove(chunk);
+                // Remove chunks that are very far away
+                if (distance > viewDistance * 2.5f) {
+                    chunk.cleanup();
+                    iterator.remove();
+                    synchronized (visibleChunks) {
+                        visibleChunks.remove(chunk);
+                    }
+                }
             }
+        } catch (Exception e) {
+            System.err.println("Error in cleanupDistantChunks: " + e.getMessage());
         }
     }
 
@@ -224,22 +343,34 @@ public class TerrainManager {
      * Render all visible terrain chunks
      */
     public void render() {
+        if (!initialized) {
+            return;
+        }
+
         chunksRendered = 0;
 
-        // Sort chunks by distance for better depth sorting
-        List<TerrainChunk> sortedChunks = new ArrayList<>(visibleChunks);
-        sortedChunks.sort((a, b) -> {
-            float distA = currentCameraPos.distance(a.getPosition());
-            float distB = currentCameraPos.distance(b.getPosition());
-            return Float.compare(distA, distB);
-        });
-
-        // Render chunks front to back for better performance
-        for (TerrainChunk chunk : sortedChunks) {
-            if (chunk.isReadyToRender()) {
-                chunk.render();
-                chunksRendered++;
+        try {
+            List<TerrainChunk> chunksToRender;
+            synchronized (visibleChunks) {
+                chunksToRender = new ArrayList<>(visibleChunks);
             }
+
+            // Sort chunks by distance for better depth sorting
+            chunksToRender.sort((a, b) -> {
+                float distA = currentCameraPos.distance(a.getPosition());
+                float distB = currentCameraPos.distance(b.getPosition());
+                return Float.compare(distA, distB);
+            });
+
+            // Render chunks front to back for better performance
+            for (TerrainChunk chunk : chunksToRender) {
+                if (chunk.isReadyToRender()) {
+                    chunk.render();
+                    chunksRendered++;
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error in terrain render: " + e.getMessage());
         }
     }
 
@@ -247,16 +378,22 @@ public class TerrainManager {
      * Get height at specific world coordinates
      */
     public float getHeightAt(float worldX, float worldZ) {
-        // Find the chunk containing this position
-        String chunkKey = findChunkKeyForPosition(worldX, worldZ);
-        TerrainChunk chunk = activeChunks.get(chunkKey);
+        try {
+            // Find the chunk containing this position
+            String chunkKey = findChunkKeyForPosition(worldX, worldZ);
+            TerrainChunk chunk = activeChunks.get(chunkKey);
 
-        if (chunk != null && chunk.isGenerated()) {
-            return chunk.getHeightAt(worldX, worldZ);
+            if (chunk != null && chunk.isGenerated()) {
+                return chunk.getHeightAt(worldX, worldZ);
+            }
+
+            // Fallback to procedural generation
+            return generateHeightFallback(worldX, worldZ);
+
+        } catch (Exception e) {
+            System.err.println("Error getting height at " + worldX + ", " + worldZ + ": " + e.getMessage());
+            return 0.0f;
         }
-
-        // Fallback to procedural generation
-        return generateHeightFallback(worldX, worldZ);
     }
 
     private String findChunkKeyForPosition(float worldX, float worldZ) {
@@ -267,9 +404,13 @@ public class TerrainManager {
     }
 
     private float generateHeightFallback(float x, float z) {
-        // Simple noise fallback for positions without chunks
-        return (float) (Math.sin(x * 0.005f) * Math.cos(z * 0.005f) * 20.0f +
-                Math.sin(x * 0.01f) * Math.cos(z * 0.01f) * 10.0f);
+        try {
+            // Simple noise fallback for positions without chunks
+            return (float) (Math.sin(x * 0.005f) * Math.cos(z * 0.005f) * 20.0f +
+                    Math.sin(x * 0.01f) * Math.cos(z * 0.01f) * 10.0f);
+        } catch (Exception e) {
+            return 0.0f;
+        }
     }
 
     private Vector3f getCameraFront() {
@@ -293,52 +434,89 @@ public class TerrainManager {
         this.fov = fov;
         this.nearPlane = nearPlane;
         this.farPlane = farPlane;
-        this.viewDistance = viewDistance;
+        this.viewDistance = Math.min(viewDistance, 500.0f); // Cap view distance for stability
     }
 
     /**
      * Get performance information
      */
     public String getPerformanceInfo() {
-        return String.format(
-                "Terrain: Chunks Active=%d, Visible=%d, Generated=%d, Rendered=%d, Buffer Updates=%d",
-                activeChunks.size(),
-                visibleChunks.size(),
-                chunksGenerated,
-                chunksRendered,
-                bufferUpdatesThisFrame
-        );
+        try {
+            return String.format(
+                    "Terrain: Chunks Active=%d, Visible=%d, Generated=%d, Rendered=%d, Buffer Updates=%d",
+                    activeChunks.size(),
+                    visibleChunks.size(),
+                    chunksGenerated,
+                    chunksRendered,
+                    bufferUpdatesThisFrame
+            );
+        } catch (Exception e) {
+            return "Terrain: Error getting performance info";
+        }
     }
 
     /**
      * Cleanup all resources
      */
     public void cleanup() {
-        for (TerrainChunk chunk : activeChunks.values()) {
-            chunk.cleanup();
-        }
-        activeChunks.clear();
-        visibleChunks.clear();
-        bufferUpdateQueue.clear();
+        try {
+            System.out.println("Cleaning up terrain manager...");
 
-        // Shutdown the chunk generation thread pool
-        TerrainChunk.shutdown();
+            synchronized (updateLock) {
+                initialized = false;
+
+                for (TerrainChunk chunk : activeChunks.values()) {
+                    chunk.cleanup();
+                }
+                activeChunks.clear();
+
+                synchronized (visibleChunks) {
+                    visibleChunks.clear();
+                }
+
+                synchronized (bufferUpdateQueue) {
+                    bufferUpdateQueue.clear();
+                }
+            }
+
+            // Shutdown the chunk generation thread pool
+            TerrainChunk.shutdown();
+
+            System.out.println("Terrain manager cleanup completed");
+
+        } catch (Exception e) {
+            System.err.println("Error during terrain manager cleanup: " + e.getMessage());
+        }
     }
 
     /**
      * Force regeneration of chunks around a position (for terrain editing)
      */
     public void invalidateArea(Vector3f center, float radius) {
-        for (TerrainChunk chunk : activeChunks.values()) {
-            Vector3f chunkCenter = new Vector3f(chunk.getPosition())
-                    .add(chunk.getSize() / 2, 0, chunk.getSize() / 2);
+        try {
+            synchronized (updateLock) {
+                List<String> keysToRemove = new ArrayList<>();
 
-            if (center.distance(chunkCenter) < radius + chunk.getSize()) {
-                chunk.cleanup();
-                String key = getChunkKey(chunk.getPosition(), chunk.getLevel());
-                activeChunks.remove(key);
-                visibleChunks.remove(chunk);
+                for (Map.Entry<String, TerrainChunk> entry : activeChunks.entrySet()) {
+                    TerrainChunk chunk = entry.getValue();
+                    Vector3f chunkCenter = new Vector3f(chunk.getPosition())
+                            .add(chunk.getSize() / 2, 0, chunk.getSize() / 2);
+
+                    if (center.distance(chunkCenter) < radius + chunk.getSize()) {
+                        chunk.cleanup();
+                        keysToRemove.add(entry.getKey());
+                        synchronized (visibleChunks) {
+                            visibleChunks.remove(chunk);
+                        }
+                    }
+                }
+
+                for (String key : keysToRemove) {
+                    activeChunks.remove(key);
+                }
             }
+        } catch (Exception e) {
+            System.err.println("Error invalidating terrain area: " + e.getMessage());
         }
     }
 
@@ -348,7 +526,9 @@ public class TerrainManager {
     }
 
     public int getVisibleChunkCount() {
-        return visibleChunks.size();
+        synchronized (visibleChunks) {
+            return visibleChunks.size();
+        }
     }
 
     public int getChunksRendered() {
@@ -360,102 +540,10 @@ public class TerrainManager {
     }
 
     public void setViewDistance(float viewDistance) {
-        this.viewDistance = viewDistance;
+        this.viewDistance = Math.max(50.0f, Math.min(viewDistance, 500.0f)); // Clamp for stability
     }
 
-    /**
-     * Spatial data structure for efficient terrain chunk management
-     */
-    private static class TerrainQuadTree {
-        private final Vector3f center;
-        private final float size;
-        private final int maxDepth;
-        private TerrainQuadTree[] children;
-        private boolean isLeaf;
-
-        public TerrainQuadTree(Vector3f center, float size) {
-            this(center, size, 0, MAX_LOD_LEVEL);
-        }
-
-        private TerrainQuadTree(Vector3f center, float size, int depth, int maxDepth) {
-            this.center = new Vector3f(center);
-            this.size = size;
-            this.maxDepth = maxDepth;
-            this.isLeaf = depth >= maxDepth || size <= BASE_CHUNK_SIZE;
-
-            if (!isLeaf) {
-                children = new TerrainQuadTree[4];
-                float childSize = size / 2;
-                float offset = childSize / 2;
-
-                children[0] = new TerrainQuadTree(
-                        new Vector3f(center.x - offset, center.y, center.z - offset),
-                        childSize, depth + 1, maxDepth
-                );
-                children[1] = new TerrainQuadTree(
-                        new Vector3f(center.x + offset, center.y, center.z - offset),
-                        childSize, depth + 1, maxDepth
-                );
-                children[2] = new TerrainQuadTree(
-                        new Vector3f(center.x - offset, center.y, center.z + offset),
-                        childSize, depth + 1, maxDepth
-                );
-                children[3] = new TerrainQuadTree(
-                        new Vector3f(center.x + offset, center.y, center.z + offset),
-                        childSize, depth + 1, maxDepth
-                );
-            }
-        }
-
-        public void update(Vector3f cameraPos, float viewDistance, ChunkCallback callback) {
-            float distance = cameraPos.distance(center);
-
-            if (distance - (size * 0.7f) > viewDistance) {
-                return; // Too far away
-            }
-
-            if (isLeaf) {
-                // Calculate LOD level based on distance
-                int lodLevel = calculateLODLevel(distance);
-                Vector3f chunkPos = new Vector3f(center.x - size / 2, 0, center.z - size / 2);
-                callback.onChunkNeeded(chunkPos, size, lodLevel);
-            } else {
-                // Recursively update children
-                for (TerrainQuadTree child : children) {
-                    child.update(cameraPos, viewDistance, callback);
-                }
-            }
-        }
-
-        public void updatePredictive(Vector3f predictedPos, float viewDistance, ChunkCallback callback) {
-            float distance = predictedPos.distance(center);
-
-            if (distance - (size * 0.7f) > viewDistance) {
-                return;
-            }
-
-            if (isLeaf) {
-                int lodLevel = calculateLODLevel(distance) + 1; // Lower detail for predictive
-                Vector3f chunkPos = new Vector3f(center.x - size / 2, 0, center.z - size / 2);
-                callback.onChunkNeeded(chunkPos, size, Math.min(lodLevel, MAX_LOD_LEVEL));
-            } else {
-                for (TerrainQuadTree child : children) {
-                    child.updatePredictive(predictedPos, viewDistance, callback);
-                }
-            }
-        }
-
-        private int calculateLODLevel(float distance) {
-            if (distance < 50) return 0;
-            if (distance < 100) return 1;
-            if (distance < 200) return 2;
-            if (distance < 300) return 3;
-            return MAX_LOD_LEVEL;
-        }
-    }
-
-    @FunctionalInterface
-    private interface ChunkCallback {
-        void onChunkNeeded(Vector3f position, float size, int level);
+    public boolean isInitialized() {
+        return initialized;
     }
 }
