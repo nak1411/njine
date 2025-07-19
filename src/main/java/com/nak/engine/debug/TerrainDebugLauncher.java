@@ -1,5 +1,6 @@
 package com.nak.engine.debug;
 
+import com.nak.engine.render.MasterRenderer;
 import com.nak.engine.render.Window;
 
 /**
@@ -19,6 +20,16 @@ public class TerrainDebugLauncher {
 
             // Hook into the initialization process to add debugging
             window.init();
+
+            // Apply all fixes
+            UniformFix.fixAllShaderUniforms();
+            ShaderDebugUtility.debugShaderSystem();
+            ShaderDebugUtility.debugVertexColors();
+
+            // Force lighting parameters
+            //MasterRenderer renderer = window.getRenderer(); // You'll need to expose this
+            //renderer.setAmbientStrength(0.8f); // High ambient
+            //renderer.setSunColor(1.0f, 1.0f, 1.0f); // Pure white light
 
             // Add debug code after OpenGL context is created
             System.out.println("\n--- POST-INITIALIZATION DEBUG ---");
