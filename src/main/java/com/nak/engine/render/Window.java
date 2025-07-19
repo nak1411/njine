@@ -1,5 +1,6 @@
 package com.nak.engine.render;
 
+import com.nak.engine.debug.CompleteShaderDiagnostic;
 import com.nak.engine.entity.Camera;
 import com.nak.engine.input.InputHandler;
 import com.nak.engine.state.GameState;
@@ -71,8 +72,8 @@ public class Window {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
-//        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-//        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+        //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        //glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
         // Anti-aliasing
         glfwWindowHint(GLFW_SAMPLES, msaaSamples);
@@ -86,6 +87,7 @@ public class Window {
         setupCallbacks();
         setupWindow();
         initializeOpenGL();
+        com.nak.engine.debug.EmergencyTerrainFix.completeEmergencyProcedure();
         initializeGameComponents();
 
         running = true;
