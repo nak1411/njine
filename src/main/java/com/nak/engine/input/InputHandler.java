@@ -335,49 +335,62 @@ public class InputHandler {
 
             case TOGGLE_DEBUG:
                 showDebugInfo = !showDebugInfo;
+                System.out.println("Debug info " + (showDebugInfo ? "enabled" : "disabled"));
                 break;
 
             case TOGGLE_WIREFRAME:
                 wireframeMode = !wireframeMode;
+                System.out.println("Wireframe mode " + (wireframeMode ? "ENABLED" : "DISABLED"));
+                // Note: The actual wireframe rendering is handled in MasterRenderer
                 break;
 
             case TOGGLE_CAMERA_MODE:
                 camera.setFlying(!camera.isFlying());
+                System.out.println("Flying mode " + (camera.isFlying() ? "enabled" : "disabled"));
                 break;
 
             case CAMERA_SHAKE_TEST:
                 camera.shake(0.5f, 1.0f);
+                System.out.println("Camera shake triggered");
                 break;
 
             case RESET_CAMERA:
-                camera.setPosition(new Vector3f(0, 10, 3));
+                camera.setPosition(new Vector3f(0, 20, 3));
+                System.out.println("Camera reset to origin");
                 break;
 
             case TELEPORT_RANDOM:
                 float x = (float) (Math.random() - 0.5) * 200;
                 float z = (float) (Math.random() - 0.5) * 200;
                 camera.setPosition(new Vector3f(x, 30, z));
+                System.out.println("Teleported to: " + x + ", 30, " + z);
                 break;
 
             case TOGGLE_GRAVITY:
                 freeCameraMode = !freeCameraMode;
                 camera.setFlying(freeCameraMode);
+                System.out.println("Gravity mode " + (freeCameraMode ? "off (flying)" : "on"));
                 break;
 
             case PRESET_POSITION_1:
                 camera.setPosition(new Vector3f(0, 20, 0));
+                System.out.println("Moved to preset position 1");
                 break;
             case PRESET_POSITION_2:
                 camera.setPosition(new Vector3f(50, 30, 50));
+                System.out.println("Moved to preset position 2");
                 break;
             case PRESET_POSITION_3:
                 camera.setPosition(new Vector3f(0, 100, 0));
+                System.out.println("Moved to preset position 3");
                 break;
             case PRESET_POSITION_4:
                 camera.setPosition(new Vector3f(-50, 25, -50));
+                System.out.println("Moved to preset position 4");
                 break;
             case PRESET_POSITION_5:
                 camera.setPosition(new Vector3f(100, 40, 0));
+                System.out.println("Moved to preset position 5");
                 break;
 
             default:

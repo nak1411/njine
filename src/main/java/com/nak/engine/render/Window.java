@@ -356,9 +356,35 @@ public class Window {
             runTerrainStressTest();
         }
 
+        // Force terrain regeneration around camera
+        if (glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS &&
+                glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+            System.out.println("Forcing terrain regeneration around camera...");
+            terrainManager.invalidateArea(camera.getPosition(), 100.0f);
+        }
+
         // Test terrain height generation
         if (glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS) {
             testTerrainHeight();
+        }
+
+        // Toggle renderer debug mode
+        if (glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS) {
+            if (renderer != null) {
+                boolean currentDebug = renderer.isDebugRenderingEnabled();
+                renderer.setDebugRenderingEnabled(!currentDebug);
+                System.out.println("Renderer debug mode " + (!currentDebug ? "enabled" : "disabled"));
+            }
+        }
+
+        // Print detailed terrain info
+        if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS) {
+            System.out.println("=== DETAILED TERRAIN INFO ===");
+            System.out.println(terrainManager.getPerformanceInfo());
+            System.out.println("Camera position: " + camera.getPosition());
+            System.out.println("Camera flying: " + camera.isFlying());
+            System.out.println("Wireframe mode: " + inputHandler.isWireframeMode());
+            System.out.println("=============================");
         }
     }
 
@@ -385,10 +411,8 @@ public class Window {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Set wireframe mode based on input
-        if (inputHandler.isWireframeMode()) {
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        } else {
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        if (renderer != null) {
+            renderer.setWireframeEnabled(inputHandler.isWireframeMode());
         }
 
         // Apply camera transformation

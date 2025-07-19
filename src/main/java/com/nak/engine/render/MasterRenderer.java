@@ -1,4 +1,3 @@
-// Fixed MasterRenderer.java with proper lighting setup
 package com.nak.engine.render;
 
 import com.nak.engine.entity.Camera;
@@ -272,7 +271,7 @@ public class MasterRenderer implements ShaderReloadListener {
     }
 
     /**
-     * FIXED: Main render method with proper lighting setup
+     * FIXED: Main render method with proper wireframe handling
      */
     public void render(GameState gameState, Camera camera, float interpolation) {
         // Update time-based effects
@@ -283,6 +282,9 @@ public class MasterRenderer implements ShaderReloadListener {
 
         // Begin frame
         beginFrame();
+
+        // FIXED: Apply wireframe mode BEFORE rendering
+        applyWireframeMode();
 
         // Render sky
         renderSkyWithShaders(camera);
@@ -295,6 +297,9 @@ public class MasterRenderer implements ShaderReloadListener {
 
         // Render particles
         renderParticlesWithShaders(camera, gameState.getTime());
+
+        // FIXED: Reset wireframe mode before UI
+        resetWireframeMode();
 
         // Post-processing
         if (postProcessor.isEnabled()) {
@@ -316,12 +321,21 @@ public class MasterRenderer implements ShaderReloadListener {
 
     private void beginFrame() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
 
+    // FIXED: Proper wireframe mode handling
+    private void applyWireframeMode() {
         if (wireframeEnabled) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glLineWidth(1.0f);
+            System.out.println("Wireframe mode enabled"); // Debug output
         } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         }
+    }
+
+    private void resetWireframeMode() {
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
     private void renderSkyWithShaders(Camera camera) {
@@ -350,6 +364,7 @@ public class MasterRenderer implements ShaderReloadListener {
 
         // Check if we have terrain to render
         if (terrainManager.getVisibleChunkCount() == 0) {
+            System.out.println("No visible terrain chunks to render");
             // Try to render without shader as fallback
             renderTerrainFallback();
             return;
@@ -383,6 +398,12 @@ public class MasterRenderer implements ShaderReloadListener {
                     terrainProgram.unbind();
                     renderTerrainFallback();
                     return;
+                }
+
+                // FIXED: Debug output for terrain rendering
+                if (debugRenderingEnabled) {
+                    System.out.printf("Rendering %d terrain chunks with shader%n",
+                            terrainManager.getVisibleChunkCount());
                 }
 
                 // Render terrain chunks
@@ -624,7 +645,9 @@ public class MasterRenderer implements ShaderReloadListener {
                         "Light Position: %.1f, %.1f, %.1f\n" +
                         "Sun Color: %.2f, %.2f, %.2f\n" +
                         "Ambient Strength: %.2f\n" +
-                        "Active Shaders: %s",
+                        "Wireframe: %s\n" +
+                        "Active Shaders: %s\n" +
+                        "Terrain Info: %s",
                 pos.x, pos.y, pos.z,
                 camera.getFov(),
                 Math.toDegrees(dayNightCycle),
@@ -632,7 +655,9 @@ public class MasterRenderer implements ShaderReloadListener {
                 lightPosition.x, lightPosition.y, lightPosition.z,
                 sunColor.x, sunColor.y, sunColor.z,
                 ambientStrength,
-                shaderManager.getProgramNames()
+                wireframeEnabled ? "ON" : "OFF",
+                shaderManager.getProgramNames(),
+                terrainManager.getPerformanceInfo()
         );
     }
 
@@ -719,8 +744,10 @@ public class MasterRenderer implements ShaderReloadListener {
         return wireframeEnabled;
     }
 
+    // FIXED: Proper wireframe toggle with debug output
     public void setWireframeEnabled(boolean wireframeEnabled) {
         this.wireframeEnabled = wireframeEnabled;
+        System.out.println("Wireframe mode " + (wireframeEnabled ? "ENABLED" : "DISABLED"));
     }
 
     public boolean isDebugRenderingEnabled() {
