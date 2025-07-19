@@ -1,6 +1,4 @@
 #version 330 core
-#include "common.glsl"
-#include "lighting.glsl"
 
 in vec2 texCoords;
 in vec3 worldPos;
