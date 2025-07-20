@@ -1,4 +1,5 @@
 package com.nak.engine.core.lifecycle;
 
-public class Updateable {
+public interface Updateable {
+    void update(float deltaTime);
 }

@@ -1,4 +1,5 @@
 package com.nak.engine.core.lifecycle;
 
-public class Renderable {
+public interface Renderable {
+    void render();
 }
