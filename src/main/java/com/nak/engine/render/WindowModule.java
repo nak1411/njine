@@ -4,7 +4,7 @@ import com.nak.engine.config.EngineConfig;
 import com.nak.engine.core.Module;
 import com.nak.engine.events.EventBus;
 import com.nak.engine.events.events.WindowResizeEvent;
-import com.nak.engine.shader.ShaderModule;
+import com.nak.engine.events.events.OpenGLContextReadyEvent;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.GL;
@@ -68,11 +68,12 @@ public class WindowModule extends Module {
             serviceLocator.register(WindowModule.class, this);
             serviceLocator.register("windowHandle", window);
 
-            // Notify other modules that OpenGL context is ready
-            notifyOpenGLContextReady();
-
-            initialized = true;
+            // Mark context as created
             contextCreated = true;
+            initialized = true;
+
+            // Fire event to notify all modules that OpenGL context is ready
+            notifyOpenGLContextReady();
 
             System.out.println("Window module initialized: " + windowWidth + "x" + windowHeight +
                     (config.isFullscreen() ? " (fullscreen)" : " (windowed)"));
@@ -115,6 +116,11 @@ public class WindowModule extends Module {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
 
+        // Debug context for development
+        if (config.isDebugMode()) {
+            glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
+        }
+
         // Anti-aliasing
         if (config.getMsaaSamples() > 0) {
             glfwWindowHint(GLFW_SAMPLES, config.getMsaaSamples());
@@ -141,7 +147,10 @@ public class WindowModule extends Module {
             this.windowWidth = width;
             this.windowHeight = height;
 
-            glViewport(0, 0, width, height);
+            // Update OpenGL viewport if context is ready
+            if (contextCreated) {
+                glViewport(0, 0, width, height);
+            }
 
             if (eventBus != null) {
                 eventBus.post(new WindowResizeEvent(oldWidth, oldHeight, width, height));
@@ -153,6 +162,39 @@ public class WindowModule extends Module {
             if (config.isExitOnWindowClose()) {
                 // Will be handled by main loop
             }
+        });
+
+        // Additional callbacks for input handling
+        setupInputCallbacks();
+    }
+
+    private void setupInputCallbacks() {
+        // Key callback - simplified without calling InputModule methods that don't exist
+        glfwSetKeyCallback(window, (window, key, scancode, action, mods) -> {
+            // Input handling can be implemented here or delegated to InputModule
+            // For now, just basic logging
+            if (action == GLFW_PRESS) {
+                System.out.println("Key pressed: " + key);
+            }
+        });
+
+        // Mouse button callback
+        glfwSetMouseButtonCallback(window, (window, button, action, mods) -> {
+            // Basic mouse handling
+            if (action == GLFW_PRESS) {
+                System.out.println("Mouse button pressed: " + button);
+            }
+        });
+
+        // Cursor position callback
+        glfwSetCursorPosCallback(window, (window, xpos, ypos) -> {
+            // Mouse movement handling
+        });
+
+        // Scroll callback
+        glfwSetScrollCallback(window, (window, xoffset, yoffset) -> {
+            // Scroll handling
+            System.out.println("Scroll: " + xoffset + ", " + yoffset);
         });
     }
 
@@ -183,38 +225,66 @@ public class WindowModule extends Module {
     }
 
     private void initializeOpenGL() {
-        // Create OpenGL capabilities
-        GL.createCapabilities();
+        try {
+            // Create OpenGL capabilities - CRITICAL for LWJGL
+            GL.createCapabilities();
 
-        // Log OpenGL info
-        System.out.println("OpenGL Version: " + glGetString(GL_VERSION));
-        System.out.println("Graphics Card: " + glGetString(GL_RENDERER));
-        System.out.println("OpenGL Vendor: " + glGetString(GL_VENDOR));
+            // Verify context is working
+            String glVersion = glGetString(GL_VERSION);
+            String glRenderer = glGetString(GL_RENDERER);
+            String glVendor = glGetString(GL_VENDOR);
 
-        // Set initial viewport
-        glViewport(0, 0, windowWidth, windowHeight);
+            if (glVersion == null) {
+                throw new RuntimeException("Failed to create OpenGL context");
+            }
 
-        // Basic OpenGL setup
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_BACK);
-        glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+            // Log OpenGL info
+            System.out.println("OpenGL Version: " + glVersion);
+            System.out.println("Graphics Card: " + glRenderer);
+            System.out.println("OpenGL Vendor: " + glVendor);
 
-        System.out.println("OpenGL context initialized successfully");
+            // Set initial viewport
+            glViewport(0, 0, windowWidth, windowHeight);
+
+            // Basic OpenGL setup that's safe to do immediately
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+            glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+
+            System.out.println("OpenGL context initialized successfully");
+
+        } catch (Exception e) {
+            System.err.println("Failed to initialize OpenGL context: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("OpenGL context initialization failed", e);
+        }
     }
 
     private void notifyOpenGLContextReady() {
-        // Notify ShaderModule that OpenGL context is ready
-        ShaderModule shaderModule = getOptionalService(ShaderModule.class);
-        if (shaderModule != null) {
-            shaderModule.createOpenGLResources();
-        }
+        try {
+            // Get OpenGL info for the event
+            String glVersion = glGetString(GL_VERSION);
+            String glRenderer = glGetString(GL_RENDERER);
+            String glVendor = glGetString(GL_VENDOR);
 
-        // Notify InputModule about window handle
-        com.nak.engine.input.InputModule inputModule = getOptionalService(com.nak.engine.input.InputModule.class);
-        if (inputModule != null) {
-            inputModule.setWindowHandle(window);
+            // Create and fire the event
+            OpenGLContextReadyEvent event = new OpenGLContextReadyEvent(
+                    window, glVersion, glRenderer, glVendor, windowWidth, windowHeight
+            );
+
+            System.out.println("Broadcasting OpenGL context ready event...");
+            eventBus.post(event);
+
+            // Give the event bus time to process
+            eventBus.processEvents();
+
+            System.out.println("OpenGL context notification complete");
+
+        } catch (Exception e) {
+            System.err.println("Failed to notify about OpenGL context: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -232,7 +302,7 @@ public class WindowModule extends Module {
     }
 
     public void swapBuffers() {
-        if (initialized) {
+        if (initialized && contextCreated) {
             glfwSwapBuffers(window);
         }
     }
@@ -241,84 +311,34 @@ public class WindowModule extends Module {
         return initialized && glfwWindowShouldClose(window);
     }
 
-    public void setShouldClose(boolean shouldClose) {
-        if (initialized) {
-            glfwSetWindowShouldClose(window, shouldClose);
-        }
-    }
-
-    public void toggleFullscreen() {
-        if (!initialized) return;
-
-        try {
-            boolean isFullscreen = config.isFullscreen();
-            config.setFullscreen(!isFullscreen);
-
-            if (config.isFullscreen()) {
-                // Switch to fullscreen
-                long monitor = glfwGetPrimaryMonitor();
-                GLFWVidMode vidMode = glfwGetVideoMode(monitor);
-                if (vidMode != null) {
-                    glfwSetWindowMonitor(window, monitor, 0, 0,
-                            vidMode.width(), vidMode.height(), vidMode.refreshRate());
-                }
-            } else {
-                // Switch to windowed
-                glfwSetWindowMonitor(window, NULL, 100, 100,
-                        windowWidth, windowHeight, GLFW_DONT_CARE);
-            }
-        } catch (Exception e) {
-            System.err.println("Error toggling fullscreen: " + e.getMessage());
-        }
-    }
-
     @Override
     public void cleanup() {
         try {
-            initialized = false;
-            contextCreated = false;
-
             if (window != NULL) {
                 glfwDestroyWindow(window);
                 window = NULL;
             }
 
             glfwTerminate();
-
             GLFWErrorCallback callback = glfwSetErrorCallback(null);
             if (callback != null) {
                 callback.free();
             }
 
+            contextCreated = false;
+            initialized = false;
+
             System.out.println("Window module cleaned up");
 
         } catch (Exception e) {
-            System.err.println("Error during window module cleanup: " + e.getMessage());
+            System.err.println("Error cleaning up window module: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
     // Getters
-    public long getWindow() {
-        return window;
-    }
-
-    public int getWindowWidth() {
-        return windowWidth;
-    }
-
-    public int getWindowHeight() {
-        return windowHeight;
-    }
-
-    public boolean isInitialized() {
-        return initialized;
-    }
-
-    public boolean isContextCreated() {
-        return contextCreated;
-    }
-
-    public EngineConfig getConfig() {
-        return config;
-    }
+    public long getWindowHandle() { return window; }
+    public int getWindowWidth() { return windowWidth; }
+    public int getWindowHeight() { return windowHeight; }
+    public boolean isContextCreated() { return contextCreated; }
 }

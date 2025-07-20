@@ -6,6 +6,7 @@ import com.nak.engine.core.lifecycle.Cleanupable;
 import com.nak.engine.core.lifecycle.Initializable;
 import com.nak.engine.core.lifecycle.Updateable;
 import com.nak.engine.events.EventBus;
+import com.nak.engine.render.RenderModule;
 import com.nak.engine.render.WindowModule;
 
 public class Engine implements Initializable, Updateable, Cleanupable {
@@ -85,6 +86,9 @@ public class Engine implements Initializable, Updateable, Cleanupable {
         running = true;
         lastFrameTime = System.nanoTime();
 
+        // Get render module for main loop
+        RenderModule renderModule = moduleManager.getModule(RenderModule.class);
+
         System.out.println("Starting main engine loop...");
 
         try {
@@ -99,46 +103,66 @@ public class Engine implements Initializable, Updateable, Cleanupable {
                 // Update all modules
                 update(deltaTime);
 
-                // Process events
+                // Process events (important for OpenGL context event)
                 eventBus.processEvents();
 
-                // Render frame
-                render();
+                // Render frame (only if render module is ready)
+                if (renderModule != null && renderModule.isOpenGLReady()) {
+                    renderModule.render();
+                }
 
                 // Swap buffers
                 windowModule.swapBuffers();
 
-                // Simple frame rate limiting
-                if (config.isLimitFrameRate() && config.getTargetFPS() > 0) {
-                    long frameTime = System.nanoTime() - currentTime;
-                    long targetFrameTime = 1_000_000_000L / config.getTargetFPS();
-
-                    if (frameTime < targetFrameTime) {
-                        try {
-                            Thread.sleep((targetFrameTime - frameTime) / 1_000_000);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
+                // Optional: Limit frame rate
+                if (config.getTargetFps() > 0) {
+                    limitFrameRate();
                 }
             }
+
         } catch (Exception e) {
-            System.err.println("Error in main loop: " + e.getMessage());
+            System.err.println("Fatal error in main loop: " + e.getMessage());
             e.printStackTrace();
+            throw new RuntimeException("Engine main loop failed", e);
         } finally {
             cleanup();
+            running = false;
+            System.out.println("Engine stopped");
+        }
+    }
+
+    private void limitFrameRate() {
+        if (config.getTargetFps() <= 0) return;
+
+        try {
+            long targetFrameTime = 1_000_000_000L / config.getTargetFps();
+            long currentTime = System.nanoTime();
+            long frameTime = currentTime - lastFrameTime;
+
+            if (frameTime < targetFrameTime) {
+                long sleepTime = (targetFrameTime - frameTime) / 1_000_000; // Convert to milliseconds
+                if (sleepTime > 0) {
+                    Thread.sleep(sleepTime);
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
     @Override
     public void update(float deltaTime) {
-        if (!running) return;
+        if (!initialized) return;
 
         try {
+            // Update all modules
             moduleManager.update(deltaTime);
+
+            // Update resource manager
+            resourceManager.update(deltaTime);
+
         } catch (Exception e) {
-            System.err.println("Error updating modules: " + e.getMessage());
+            System.err.println("Error updating engine: " + e.getMessage());
             e.printStackTrace();
         }
     }
