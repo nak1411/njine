@@ -1,6 +1,6 @@
 package com.nak.engine.render;
 
-import com.nak.engine.camera.Camera;
+import com.nak.engine.camera.cameras.Camera;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;

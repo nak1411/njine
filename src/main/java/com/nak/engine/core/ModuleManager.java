@@ -47,7 +47,7 @@ public class ModuleManager implements Initializable, Updateable, Cleanupable {
                     module.initialize();
 
                     // Register module in service locator
-                    serviceLocator.register(module.getClass(), module);
+                    serviceLocator.register(module.getClass().getName(), module);
 
                 } catch (Exception e) {
                     System.err.println("Failed to initialize module: " + module.getName());

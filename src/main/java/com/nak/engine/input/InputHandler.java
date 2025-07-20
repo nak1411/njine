@@ -1,10 +1,8 @@
 package com.nak.engine.input;
 
-import com.nak.engine.camera.Camera;
+import com.nak.engine.camera.cameras.Camera;
 import org.joml.Vector3f;
 
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -14,11 +12,9 @@ public class InputHandler {
     private final long window;
     private final Camera camera;
 
-    // Input state management - FIXED to use correct InputAction enum
-    private final Map<InputAction, Boolean> actionStates = new EnumMap<>(InputAction.class);
-    private final Map<InputAction, Boolean> previousActionStates = new EnumMap<>(InputAction.class);
-    private final EnumSet<InputAction> pressedThisFrame = EnumSet.noneOf(InputAction.class);
-    private final EnumSet<InputAction> releasedThisFrame = EnumSet.noneOf(InputAction.class);
+    // Input state management
+    private final Map<InputAction, Boolean> actionStates = new HashMap<>();
+    private final Map<InputAction, Boolean> previousActionStates = new HashMap<>();
 
     // Mouse state
     private double mouseX, mouseY;
@@ -42,7 +38,7 @@ public class InputHandler {
     private boolean showDebugInfo = false;
     private boolean wireframeMode = false;
 
-    // Key bindings - FIXED to use Integer values consistently
+    // Key bindings
     private final Map<Integer, InputAction> keyBindings = new HashMap<>();
 
     public InputHandler(long window, Camera camera) {
@@ -83,7 +79,7 @@ public class InputHandler {
     }
 
     private void setupCallbacks() {
-        // Key callback - FIXED
+        // Key callback
         glfwSetKeyCallback(window, (window, key, scancode, action, mods) -> {
             if (!inputEnabled) return;
 
@@ -98,7 +94,7 @@ public class InputHandler {
             }
         });
 
-        // Mouse callbacks remain the same...
+        // Mouse callbacks
         glfwSetMouseButtonCallback(window, (window, button, action, mods) -> {
             if (!inputEnabled || button >= mouseButtons.length) return;
             mouseButtons[button] = (action == GLFW_PRESS);
@@ -124,8 +120,6 @@ public class InputHandler {
 
         // Reset per-frame data
         scrollOffset = 0;
-        pressedThisFrame.clear();
-        releasedThisFrame.clear();
     }
 
     private void updateInputStates() {
@@ -138,18 +132,6 @@ public class InputHandler {
         for (Map.Entry<Integer, InputAction> entry : keyBindings.entrySet()) {
             boolean pressed = glfwGetKey(window, entry.getKey()) == GLFW_PRESS;
             setActionState(entry.getValue(), pressed);
-        }
-
-        // Detect pressed/released this frame
-        for (InputAction action : InputAction.values()) {
-            boolean current = actionStates.get(action);
-            boolean previous = previousActionStates.get(action);
-
-            if (current && !previous) {
-                pressedThisFrame.add(action);
-            } else if (!current && previous) {
-                releasedThisFrame.add(action);
-            }
         }
     }
 
@@ -171,9 +153,6 @@ public class InputHandler {
 
         sprintMode = isActionActive(InputAction.MOVE_DOWN);
         walkMode = isActionActive(InputAction.WALK);
-
-        // Apply movement to camera (simplified)
-        // In a real implementation, you'd properly integrate with the camera system
     }
 
     private void handleKeyPress(InputAction action, int mods) {
@@ -204,23 +183,59 @@ public class InputHandler {
     }
 
     public boolean wasActionPressed(InputAction action) {
-        return pressedThisFrame.contains(action);
+        boolean current = actionStates.getOrDefault(action, false);
+        boolean previous = previousActionStates.getOrDefault(action, false);
+        return current && !previous;
     }
 
     // Getters
-    public boolean isShowDebugInfo() { return showDebugInfo; }
-    public boolean isWireframeMode() { return wireframeMode; }
-    public boolean isMouseLocked() { return mouseLocked; }
-    public boolean isInputEnabled() { return inputEnabled; }
+    public boolean isShowDebugInfo() {
+        return showDebugInfo;
+    }
 
-    public void setInputEnabled(boolean enabled) { this.inputEnabled = enabled; }
-    public void setShowDebugInfo(boolean show) { this.showDebugInfo = show; }
-    public void setWireframeMode(boolean wireframe) { this.wireframeMode = wireframe; }
+    public boolean isWireframeMode() {
+        return wireframeMode;
+    }
+
+    public boolean isMouseLocked() {
+        return mouseLocked;
+    }
+
+    public boolean isInputEnabled() {
+        return inputEnabled;
+    }
+
+    public void setInputEnabled(boolean enabled) {
+        this.inputEnabled = enabled;
+    }
+
+    public void setShowDebugInfo(boolean show) {
+        this.showDebugInfo = show;
+    }
+
+    public void setWireframeMode(boolean wireframe) {
+        this.wireframeMode = wireframe;
+    }
 
     public void onWindowFocus(boolean focused) {
         if (!focused && mouseLocked) {
             mouseLocked = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
+    }
+
+    public String getControlsHelp() {
+        return """
+                === CONTROLS ===
+                WASD - Move
+                Space - Move Up
+                Shift - Move Down
+                F1 - Toggle Debug
+                F2 - Toggle Wireframe
+                F11 - Toggle Fullscreen
+                Esc - Toggle Mouse Lock
+                Mouse - Look Around
+                ===============
+                """;
     }
 }

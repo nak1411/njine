@@ -5,8 +5,10 @@ import com.nak.engine.core.Module;
 import com.nak.engine.events.EventBus;
 import com.nak.engine.events.annotations.EventHandler;
 import com.nak.engine.events.events.CameraMovedEvent;
+import com.nak.engine.terrain.generation.NoiseGenerator;
 import com.nak.engine.terrain.generation.TerrainGenerator;
 import com.nak.engine.terrain.lod.LODManager;
+import com.nak.engine.terrain.streaming.TerrainStreamer;
 import org.joml.Vector3f;
 
 public class TerrainModule extends Module {
@@ -41,7 +43,7 @@ public class TerrainModule extends Module {
         eventBus = getService(EventBus.class);
 
         // Initialize components
-        generator = new NoiseTerrainGenerator(settings);
+        generator = new NoiseGenerator(settings);
         streamer = new TerrainStreamer(settings, generator);
         lodManager = new LODManager(settings);
         renderer = new TerrainRenderer();
