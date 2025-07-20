@@ -1,11 +1,16 @@
 package com.nak.engine.render;
 
-import com.nak.engine.core.Module;
 import com.nak.engine.config.RenderSettings;
+import com.nak.engine.core.Module;
 import com.nak.engine.events.EventBus;
 import com.nak.engine.events.annotations.EventHandler;
 import com.nak.engine.events.events.ShaderReloadedEvent;
 import com.nak.engine.events.events.WindowResizeEvent;
+import com.nak.engine.render.culling.FrustumCuller;
+import com.nak.engine.render.pipelines.ParticlePipeline;
+import com.nak.engine.render.pipelines.SkyboxPipeline;
+import com.nak.engine.render.pipelines.TerrainPipeline;
+import com.nak.engine.render.pipelines.UIPipeline;
 
 public class RenderModule extends Module {
     private RenderSettings settings;
