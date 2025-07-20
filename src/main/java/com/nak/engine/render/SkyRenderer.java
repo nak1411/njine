@@ -1,6 +1,6 @@
 package com.nak.engine.render;
 
-import com.nak.engine.camera.cameras.Camera;
+import com.nak.engine.camera.Camera;
 import org.joml.Vector3f;
 
 import static org.lwjgl.opengl.GL11.*;

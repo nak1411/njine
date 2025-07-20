@@ -24,7 +24,6 @@ public class ResourceManager implements Cleanupable {
         registerLoader("properties", new PropertiesResourceLoader());
     }
 
-    // ========== NEW UPDATE METHOD ==========
     public void update(float deltaTime) {
         try {
             long currentTime = System.currentTimeMillis();

@@ -1,8 +1,7 @@
-package com.nak.engine.camera.cameras;
+package com.nak.engine.camera;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import org.lwjgl.BufferUtils;
 
 import java.nio.FloatBuffer;
 
