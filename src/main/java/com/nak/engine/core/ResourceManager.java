@@ -14,10 +14,47 @@ public class ResourceManager implements Cleanupable {
     private final Map<String, ResourceLoader<?>> loaders = new HashMap<>();
     private final Set<String> loadingResources = ConcurrentHashMap.newKeySet();
 
+    // Performance tracking
+    private long lastCleanupTime = 0;
+    private static final long CLEANUP_INTERVAL = 60_000; // 1 minute
+
     public ResourceManager() {
         // Register default loaders
         registerLoader("txt", new TextResourceLoader());
         registerLoader("properties", new PropertiesResourceLoader());
+    }
+
+    // ========== NEW UPDATE METHOD ==========
+    public void update(float deltaTime) {
+        try {
+            long currentTime = System.currentTimeMillis();
+
+            // Periodic cleanup of unused resources
+            if (currentTime - lastCleanupTime > CLEANUP_INTERVAL) {
+                cleanupUnusedResources();
+                lastCleanupTime = currentTime;
+            }
+
+            // Process any pending async loads
+            processAsyncLoads();
+
+        } catch (Exception e) {
+            System.err.println("Error updating resource manager: " + e.getMessage());
+        }
+    }
+
+    private void cleanupUnusedResources() {
+        // Implement sophisticated cleanup logic here
+        // For now, this is a placeholder
+        int resourceCount = resources.size();
+        if (resourceCount > 100) { // Example threshold
+            System.out.println("Resource manager has " + resourceCount + " loaded resources");
+        }
+    }
+
+    private void processAsyncLoads() {
+        // Implement asynchronous loading processing here
+        // This could handle background loading tasks
     }
 
     public <T> void registerLoader(String extension, ResourceLoader<T> loader) {
@@ -75,6 +112,14 @@ public class ResourceManager implements Cleanupable {
         return resources.containsKey(resourcePath);
     }
 
+    public int getLoadedResourceCount() {
+        return resources.size();
+    }
+
+    public Set<String> getLoadedResourcePaths() {
+        return resources.keySet();
+    }
+
     private String getFileExtension(String filename) {
         int lastDot = filename.lastIndexOf('.');
         return lastDot > 0 ? filename.substring(lastDot + 1).toLowerCase() : "";
@@ -94,6 +139,7 @@ public class ResourceManager implements Cleanupable {
         }
         resources.clear();
         loaders.clear();
+        loadingResources.clear();
     }
 
     // Resource loader interface

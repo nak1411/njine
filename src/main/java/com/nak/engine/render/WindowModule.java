@@ -307,6 +307,12 @@ public class WindowModule extends Module {
         }
     }
 
+    public void setShouldClose(boolean shouldClose) {
+        if (window != NULL) {
+            glfwSetWindowShouldClose(window, shouldClose);
+        }
+    }
+
     public boolean shouldClose() {
         return initialized && glfwWindowShouldClose(window);
     }

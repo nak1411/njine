@@ -3,6 +3,7 @@ import com.nak.engine.config.*;
 import com.nak.engine.core.Engine;
 import com.nak.engine.input.InputModule;
 import com.nak.engine.render.RenderModule;
+import com.nak.engine.render.WindowModule;  // ← ADD THIS IMPORT
 import com.nak.engine.shader.ShaderModule;
 import com.nak.engine.terrain.TerrainModule;
 
@@ -28,9 +29,10 @@ public class Launcher {
                 System.err.println("Using default values for invalid settings");
             }
 
-            // Create and configure engine
+            // Create and configure engine - ADD WINDOWMODULE HERE!
             Engine engine = new Engine()
                     .withModule(new ConfigurationModule(engineConfig, renderSettings, terrainSettings, inputSettings))
+                    .withModule(new WindowModule())  // ← ADD THIS LINE - MOST IMPORTANT FIX!
                     .withModule(new ShaderModule())
                     .withModule(new CameraModule())
                     .withModule(new InputModule())
