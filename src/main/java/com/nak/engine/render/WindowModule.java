@@ -229,6 +229,17 @@ public class WindowModule extends Module {
             // Create OpenGL capabilities - CRITICAL for LWJGL
             GL.createCapabilities();
 
+            // ADD THIS: Verify context is working
+            String version = glGetString(GL_VERSION);
+            if (version == null) {
+                throw new RuntimeException("OpenGL context failed to initialize");
+            }
+            System.out.println("OpenGL Context Verified: " + version);
+
+
+            // ADD THIS: Set visible clear color immediately
+            glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
+
             // Verify context is working
             String glVersion = glGetString(GL_VERSION);
             String glRenderer = glGetString(GL_RENDERER);
