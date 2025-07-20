@@ -1,7 +1,7 @@
 package com.nak.engine.render;
 
 import com.nak.engine.debug.TerrainDebugUtility;
-import com.nak.engine.entity.Camera;
+import com.nak.engine.camera.Camera;
 import com.nak.engine.input.InputHandler;
 import com.nak.engine.state.GameState;
 import com.nak.engine.terrain.TerrainManager;

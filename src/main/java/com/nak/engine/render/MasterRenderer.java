@@ -1,6 +1,6 @@
 package com.nak.engine.render;
 
-import com.nak.engine.entity.Camera;
+import com.nak.engine.camera.Camera;
 import com.nak.engine.shader.ShaderManager;
 import com.nak.engine.shader.ShaderProgram;
 import com.nak.engine.shader.ShaderReloadListener;
