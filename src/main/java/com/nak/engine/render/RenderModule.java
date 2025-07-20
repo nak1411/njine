@@ -42,50 +42,92 @@ public class RenderModule extends Module {
 
     @Override
     public void initialize() {
-        settings = getService(RenderSettings.class);
-        eventBus = getService(EventBus.class);
+        try {
+            // Get configuration with fallback to defaults
+            settings = getOptionalService(RenderSettings.class);
+            if (settings == null) {
+                System.out.println("RenderSettings not found, creating default settings");
+                settings = createDefaultRenderSettings();
+                serviceLocator.register(RenderSettings.class, settings);
+            }
 
-        // Initialize rendering infrastructure
-        renderQueue = new RenderQueue();
-        renderContext = new RenderContext();
-        frustumCuller = new FrustumCuller();
+            eventBus = getService(EventBus.class);
 
-        // Initialize rendering pipelines
-        terrainPipeline = new TerrainPipeline(settings);
-        skyboxPipeline = new SkyboxPipeline(settings);
-        particlePipeline = new ParticlePipeline(settings);
-        uiPipeline = new UIPipeline(settings);
+            // Initialize rendering infrastructure
+            renderQueue = new RenderQueue();
+            renderContext = new RenderContext();
+            frustumCuller = new FrustumCuller();
 
-        // Configure OpenGL state
-        setupOpenGLState();
+            // Initialize rendering pipelines
+            terrainPipeline = new TerrainPipeline(settings);
+            skyboxPipeline = new SkyboxPipeline(settings);
+            particlePipeline = new ParticlePipeline(settings);
+            uiPipeline = new UIPipeline(settings);
 
-        // Register services
-        serviceLocator.register(RenderQueue.class, renderQueue);
-        serviceLocator.register(RenderContext.class, renderContext);
-        serviceLocator.register(FrustumCuller.class, frustumCuller);
+            // Configure OpenGL state
+            setupOpenGLState();
 
-        // Register for events
-        eventBus.register(this);
+            // Register services
+            serviceLocator.register(RenderQueue.class, renderQueue);
+            serviceLocator.register(RenderContext.class, renderContext);
+            serviceLocator.register(FrustumCuller.class, frustumCuller);
 
-        initialized = true;
-        System.out.println("Render module initialized");
+            // Register for events
+            eventBus.register(this);
+
+            initialized = true;
+            System.out.println("Render module initialized with settings: " + getRenderInfo());
+
+        } catch (Exception e) {
+            System.err.println("Failed to initialize render module: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Render module initialization failed", e);
+        }
+    }
+
+    private RenderSettings createDefaultRenderSettings() {
+        RenderSettings defaultSettings = new RenderSettings();
+
+        try {
+            defaultSettings.validate();
+            System.out.println("Created and validated default render settings");
+        } catch (Exception e) {
+            System.err.println("Warning: Default render settings validation failed: " + e.getMessage());
+        }
+
+        return defaultSettings;
+    }
+
+    private String getRenderInfo() {
+        return String.format("ViewDistance=%.0f MaxChunks=%d Fog=%s Wireframe=%s",
+                settings.getViewDistance(),
+                settings.getMaxVisibleChunks(),
+                settings.isEnableFog() ? "ON" : "OFF",
+                settings.isWireframeMode() ? "ON" : "OFF");
     }
 
     private void setupOpenGLState() {
-        // Enable depth testing
-        org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
-        org.lwjgl.opengl.GL11.glDepthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
+        try {
+            // Enable depth testing
+            org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
+            org.lwjgl.opengl.GL11.glDepthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
 
-        // Enable back-face culling
-        org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_CULL_FACE);
-        org.lwjgl.opengl.GL11.glCullFace(org.lwjgl.opengl.GL11.GL_BACK);
+            // Enable back-face culling
+            org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_CULL_FACE);
+            org.lwjgl.opengl.GL11.glCullFace(org.lwjgl.opengl.GL11.GL_BACK);
 
-        // Set clear color
-        org.lwjgl.opengl.GL11.glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+            // Set clear color
+            org.lwjgl.opengl.GL11.glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
 
-        // Configure MSAA if enabled
-        if (settings.getMaxVisibleChunks() > 0) { // Using this as a placeholder for MSAA setting
-            org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL13.GL_MULTISAMPLE);
+            // Configure MSAA if enabled
+            if (settings.getMaxVisibleChunks() > 0) { // Using this as a placeholder for MSAA setting
+                org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL13.GL_MULTISAMPLE);
+            }
+
+            System.out.println("OpenGL state configured successfully");
+
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to configure some OpenGL settings: " + e.getMessage());
         }
     }
 
@@ -98,10 +140,18 @@ public class RenderModule extends Module {
             renderContext.update(deltaTime);
 
             // Update pipelines
-            terrainPipeline.update(deltaTime);
-            skyboxPipeline.update(deltaTime);
-            particlePipeline.update(deltaTime);
-            uiPipeline.update(deltaTime);
+            if (terrainPipeline != null) {
+                terrainPipeline.update(deltaTime);
+            }
+            if (skyboxPipeline != null) {
+                skyboxPipeline.update(deltaTime);
+            }
+            if (particlePipeline != null) {
+                particlePipeline.update(deltaTime);
+            }
+            if (uiPipeline != null) {
+                uiPipeline.update(deltaTime);
+            }
 
         } catch (Exception e) {
             System.err.println("Error updating render module: " + e.getMessage());
@@ -125,10 +175,18 @@ public class RenderModule extends Module {
             }
 
             // Render pipelines in order
-            skyboxPipeline.render(renderContext);
-            terrainPipeline.render(renderContext);
-            particlePipeline.render(renderContext);
-            uiPipeline.render(renderContext);
+            if (skyboxPipeline != null) {
+                skyboxPipeline.render(renderContext);
+            }
+            if (terrainPipeline != null) {
+                terrainPipeline.render(renderContext);
+            }
+            if (particlePipeline != null) {
+                particlePipeline.render(renderContext);
+            }
+            if (uiPipeline != null) {
+                uiPipeline.render(renderContext);
+            }
 
             // Reset state
             if (settings.isWireframeMode()) {
@@ -148,66 +206,131 @@ public class RenderModule extends Module {
     }
 
     private void beginFrame() {
-        org.lwjgl.opengl.GL11.glClear(
-                org.lwjgl.opengl.GL11.GL_COLOR_BUFFER_BIT |
-                        org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT
-        );
-        renderQueue.clear();
+        try {
+            org.lwjgl.opengl.GL11.glClear(
+                    org.lwjgl.opengl.GL11.GL_COLOR_BUFFER_BIT |
+                            org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT
+            );
+            renderQueue.clear();
+        } catch (Exception e) {
+            System.err.println("Error beginning frame: " + e.getMessage());
+        }
     }
 
     private void endFrame() {
-        org.lwjgl.opengl.GL11.glFlush();
+        try {
+            org.lwjgl.opengl.GL11.glFlush();
+        } catch (Exception e) {
+            System.err.println("Error ending frame: " + e.getMessage());
+        }
     }
 
     @EventHandler
     public void onShaderReloaded(ShaderReloadedEvent event) {
-        if (event.isSuccess()) {
-            // Update pipelines that use the reloaded shader
-            switch (event.getShaderName()) {
-                case "terrain" -> terrainPipeline.reloadShader();
-                case "skybox" -> skyboxPipeline.reloadShader();
-                case "particle" -> particlePipeline.reloadShader();
-                case "ui" -> uiPipeline.reloadShader();
+        if (!initialized) return;
+
+        try {
+            if (event.isSuccess()) {
+                // Update pipelines that use the reloaded shader
+                switch (event.getShaderName()) {
+                    case "terrain" -> {
+                        if (terrainPipeline != null) terrainPipeline.reloadShader();
+                    }
+                    case "skybox" -> {
+                        if (skyboxPipeline != null) skyboxPipeline.reloadShader();
+                    }
+                    case "particle" -> {
+                        if (particlePipeline != null) particlePipeline.reloadShader();
+                    }
+                    case "ui" -> {
+                        if (uiPipeline != null) uiPipeline.reloadShader();
+                    }
+                }
             }
+        } catch (Exception e) {
+            System.err.println("Error handling shader reload: " + e.getMessage());
         }
     }
 
     @EventHandler
     public void onWindowResize(WindowResizeEvent event) {
-        // Update viewport
-        org.lwjgl.opengl.GL11.glViewport(0, 0, event.getNewWidth(), event.getNewHeight());
+        if (!initialized) return;
 
-        // Update render context
-        renderContext.setViewportSize(event.getNewWidth(), event.getNewHeight());
+        try {
+            // Update viewport
+            org.lwjgl.opengl.GL11.glViewport(0, 0, event.getNewWidth(), event.getNewHeight());
 
-        // Update pipelines
-        terrainPipeline.onResize(event.getNewWidth(), event.getNewHeight());
-        skyboxPipeline.onResize(event.getNewWidth(), event.getNewHeight());
-        particlePipeline.onResize(event.getNewWidth(), event.getNewHeight());
-        uiPipeline.onResize(event.getNewWidth(), event.getNewHeight());
+            // Update render context
+            renderContext.setViewportSize(event.getNewWidth(), event.getNewHeight());
+
+            // Update pipelines
+            if (terrainPipeline != null) {
+                terrainPipeline.onResize(event.getNewWidth(), event.getNewHeight());
+            }
+            if (skyboxPipeline != null) {
+                skyboxPipeline.onResize(event.getNewWidth(), event.getNewHeight());
+            }
+            if (particlePipeline != null) {
+                particlePipeline.onResize(event.getNewWidth(), event.getNewHeight());
+            }
+            if (uiPipeline != null) {
+                uiPipeline.onResize(event.getNewWidth(), event.getNewHeight());
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error handling window resize: " + e.getMessage());
+        }
     }
 
     @Override
     public void cleanup() {
-        if (terrainPipeline != null) terrainPipeline.cleanup();
-        if (skyboxPipeline != null) skyboxPipeline.cleanup();
-        if (particlePipeline != null) particlePipeline.cleanup();
-        if (uiPipeline != null) uiPipeline.cleanup();
+        try {
+            initialized = false;
 
-        initialized = false;
-        System.out.println("Render module cleaned up");
+            if (terrainPipeline != null) {
+                terrainPipeline.cleanup();
+                terrainPipeline = null;
+            }
+            if (skyboxPipeline != null) {
+                skyboxPipeline.cleanup();
+                skyboxPipeline = null;
+            }
+            if (particlePipeline != null) {
+                particlePipeline.cleanup();
+                particlePipeline = null;
+            }
+            if (uiPipeline != null) {
+                uiPipeline.cleanup();
+                uiPipeline = null;
+            }
+
+            System.out.println("Render module cleaned up");
+
+        } catch (Exception e) {
+            System.err.println("Error during render module cleanup: " + e.getMessage());
+        }
     }
 
     // Getters for external access
     public boolean isWireframeEnabled() {
-        return settings.isWireframeMode();
+        return settings != null && settings.isWireframeMode();
     }
 
     public void setWireframeEnabled(boolean enabled) {
-        settings.setWireframeMode(enabled);
+        if (settings != null) {
+            settings.setWireframeMode(enabled);
+        }
     }
 
     public RenderContext getRenderContext() {
         return renderContext;
+    }
+
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    public RenderSettings getSettings() {
+        return settings;
     }
 }

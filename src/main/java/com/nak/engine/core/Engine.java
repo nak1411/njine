@@ -6,6 +6,7 @@ import com.nak.engine.core.lifecycle.Cleanupable;
 import com.nak.engine.core.lifecycle.Initializable;
 import com.nak.engine.core.lifecycle.Updateable;
 import com.nak.engine.events.EventBus;
+import com.nak.engine.render.WindowModule;
 
 public class Engine implements Initializable, Updateable, Cleanupable {
     private final ModuleManager moduleManager;
@@ -14,6 +15,7 @@ public class Engine implements Initializable, Updateable, Cleanupable {
     private final ResourceManager resourceManager;
 
     private EngineConfig config;
+    private WindowModule windowModule;
     private boolean initialized = false;
     private boolean running = false;
 
@@ -60,6 +62,12 @@ public class Engine implements Initializable, Updateable, Cleanupable {
             // Initialize modules in dependency order
             moduleManager.initialize();
 
+            // Get window module for main loop
+            windowModule = moduleManager.getModule(WindowModule.class);
+            if (windowModule == null) {
+                throw new RuntimeException("WindowModule is required but not found");
+            }
+
             initialized = true;
             System.out.println("Engine initialized successfully");
 
@@ -77,8 +85,10 @@ public class Engine implements Initializable, Updateable, Cleanupable {
         running = true;
         lastFrameTime = System.nanoTime();
 
+        System.out.println("Starting main engine loop...");
+
         try {
-            while (running) {
+            while (running && !windowModule.shouldClose()) {
                 long currentTime = System.nanoTime();
                 deltaTime = (currentTime - lastFrameTime) / 1_000_000_000.0f;
                 lastFrameTime = currentTime;
@@ -86,13 +96,20 @@ public class Engine implements Initializable, Updateable, Cleanupable {
                 // Cap delta time to prevent spiral of death
                 deltaTime = Math.min(deltaTime, 0.25f);
 
+                // Update all modules
                 update(deltaTime);
 
                 // Process events
                 eventBus.processEvents();
 
+                // Render frame
+                render();
+
+                // Swap buffers
+                windowModule.swapBuffers();
+
                 // Simple frame rate limiting
-                if (config.getTargetFPS() > 0) {
+                if (config.isLimitFrameRate() && config.getTargetFPS() > 0) {
                     long frameTime = System.nanoTime() - currentTime;
                     long targetFrameTime = 1_000_000_000L / config.getTargetFPS();
 
@@ -126,14 +143,41 @@ public class Engine implements Initializable, Updateable, Cleanupable {
         }
     }
 
+    private void render() {
+        try {
+            // Get render module and call its render method
+            com.nak.engine.render.RenderModule renderModule =
+                    moduleManager.getModule(com.nak.engine.render.RenderModule.class);
+            if (renderModule != null) {
+                renderModule.render();
+            }
+
+            // Get terrain module and call its render method
+            com.nak.engine.terrain.TerrainModule terrainModule =
+                    moduleManager.getModule(com.nak.engine.terrain.TerrainModule.class);
+            if (terrainModule != null) {
+                terrainModule.render();
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error rendering frame: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
     public void stop() {
         running = false;
+        if (windowModule != null) {
+            windowModule.setShouldClose(true);
+        }
     }
 
     @Override
     public void cleanup() {
         try {
             running = false;
+
+            System.out.println("Cleaning up engine...");
 
             if (moduleManager != null) {
                 moduleManager.cleanup();
@@ -181,5 +225,9 @@ public class Engine implements Initializable, Updateable, Cleanupable {
 
     public boolean isRunning() {
         return running;
+    }
+
+    public WindowModule getWindowModule() {
+        return windowModule;
     }
 }

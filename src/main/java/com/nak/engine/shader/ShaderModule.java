@@ -5,6 +5,7 @@ import com.nak.engine.core.ResourceManager;
 import com.nak.engine.events.EventBus;
 import com.nak.engine.events.events.ShaderReloadedEvent;
 
+import java.io.IOException;
 import java.nio.file.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -24,6 +25,7 @@ public class ShaderModule extends Module {
     private WatchService watchService;
     private Path shaderDirectory;
     private boolean hotReloadEnabled = false;
+    private boolean openGLResourcesCreated = false;
 
     @Override
     public String getName() {
@@ -45,16 +47,15 @@ public class ShaderModule extends Module {
         cache = new ShaderCache();
         shaderDirectory = Paths.get("src/main/resources/shaders");
 
-        // Load built-in shaders
-        loadBuiltInShaders();
-
-        // Load shaders from files
-        loadShadersFromFiles();
+        // DON'T load shaders here - wait for OpenGL context
+        System.out.println("Shader module initialized (waiting for OpenGL context)");
 
         // Setup hot reload if enabled
-        boolean debugMode = getOptionalService(com.nak.engine.config.EngineConfig.class)
-                .map(config -> config.isEnableHotReload())
-                .orElse(false);
+        boolean debugMode = false;
+        com.nak.engine.config.EngineConfig engineConfig = getOptionalService(com.nak.engine.config.EngineConfig.class);
+        if (engineConfig != null) {
+            debugMode = engineConfig.isEnableHotReload();
+        }
 
         if (debugMode) {
             setupHotReload();
@@ -62,12 +63,37 @@ public class ShaderModule extends Module {
 
         // Register services
         serviceLocator.register(ShaderModule.class, this);
+    }
 
-        System.out.println("Shader module initialized with " + programs.size() + " programs");
+    /**
+     * Call this after OpenGL context is created to actually create the shader programs
+     */
+    public void createOpenGLResources() {
+        if (openGLResourcesCreated) {
+            System.out.println("OpenGL resources already created, skipping");
+            return;
+        }
+
+        try {
+            System.out.println("Creating OpenGL shader resources...");
+
+            // Now we can safely create OpenGL resources
+            loadBuiltInShaders();
+            loadShadersFromFiles();
+
+            openGLResourcesCreated = true;
+            System.out.println("Shader module OpenGL resources created with " + programs.size() + " programs");
+
+        } catch (Exception e) {
+            System.err.println("Failed to create OpenGL shader resources: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     private void loadBuiltInShaders() {
         try {
+            System.out.println("Loading built-in shaders...");
+
             // Create basic terrain shader
             createProgram("terrain",
                     getBuiltInVertexShader("terrain"),
@@ -85,17 +111,23 @@ public class ShaderModule extends Module {
                     getBuiltInVertexShader("ui"),
                     getBuiltInFragmentShader("ui"));
 
+            System.out.println("Built-in shaders loaded successfully");
+
         } catch (Exception e) {
             System.err.println("Failed to load built-in shaders: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
     private void loadShadersFromFiles() {
         if (!Files.exists(shaderDirectory)) {
+            System.out.println("Shader directory not found, skipping file loading");
             return;
         }
 
         try {
+            System.out.println("Loading shaders from files...");
+
             // Load shader pairs
             String[] shaderNames = {"terrain", "basic", "skybox", "ui", "particle", "water"};
 
@@ -134,8 +166,10 @@ public class ShaderModule extends Module {
             String processedFragSource = processShaderSource(fragmentSource);
 
             // Validate shaders
-            validator.validateVertexShader(processedVertSource);
-            validator.validateFragmentShader(processedFragSource);
+            if (validator != null) {
+                validator.validateVertexShader(processedVertSource);
+                validator.validateFragmentShader(processedFragSource);
+            }
 
             // Create program
             ShaderProgram program = new ShaderProgram(name);
@@ -152,7 +186,9 @@ public class ShaderModule extends Module {
 
             // Cache the program
             programs.put(name, program);
-            cache.put(name, program);
+            if (cache != null) {
+                cache.put(name, program);
+            }
 
             // Store sources for hot reload
             sources.put(name, new ShaderSource(vertexSource, fragmentSource));
@@ -168,24 +204,52 @@ public class ShaderModule extends Module {
     private String processShaderSource(String source) {
         // Process #include directives
         source = processIncludes(source);
-
         // Process #define macros
         source = processMacros(source);
-
         return source;
     }
 
     private String processIncludes(String source) {
-        // Simple include processing - could be enhanced
-        return source.replaceAll("#include\\s+\"([^\"]+)\"", (match) -> {
-            String includePath = match.group(1);
-            try {
-                return Files.readString(shaderDirectory.resolve(includePath));
-            } catch (Exception e) {
-                System.err.println("Failed to include shader: " + includePath);
-                return "// Failed to include: " + includePath;
+        // Simple include processing
+        String[] lines = source.split("\n");
+        StringBuilder result = new StringBuilder();
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("#include")) {
+                String includePath = extractIncludePath(trimmed);
+                if (includePath != null) {
+                    try {
+                        String includeSource = Files.readString(shaderDirectory.resolve(includePath));
+                        result.append("// Begin include: ").append(includePath).append("\n");
+                        result.append(includeSource);
+                        result.append("// End include: ").append(includePath).append("\n");
+                    } catch (Exception e) {
+                        System.err.println("Failed to include shader: " + includePath);
+                        result.append("// Failed to include: ").append(includePath).append("\n");
+                    }
+                } else {
+                    result.append(line).append("\n");
+                }
+            } else {
+                result.append(line).append("\n");
             }
-        });
+        }
+
+        return result.toString();
+    }
+
+    private String extractIncludePath(String includeLine) {
+        // Extract path from #include "path" or #include <path>
+        int start = includeLine.indexOf('"');
+        if (start == -1) start = includeLine.indexOf('<');
+        if (start == -1) return null;
+
+        int end = includeLine.indexOf('"', start + 1);
+        if (end == -1) end = includeLine.indexOf('>', start + 1);
+        if (end == -1) return null;
+
+        return includeLine.substring(start + 1, end);
     }
 
     private String processMacros(String source) {
@@ -193,7 +257,6 @@ public class ShaderModule extends Module {
         StringBuilder macros = new StringBuilder();
         macros.append("#define ENGINE_VERSION 100\n");
         macros.append("#define PI 3.14159265359\n");
-
         return macros + source;
     }
 
@@ -204,89 +267,12 @@ public class ShaderModule extends Module {
                     StandardWatchEventKinds.ENTRY_MODIFY,
                     StandardWatchEventKinds.ENTRY_CREATE);
 
-            // Start watch thread
-            Thread watchThread = new Thread(this::watchForChanges);
-            watchThread.setDaemon(true);
-            watchThread.setName("ShaderHotReload");
-            watchThread.start();
-
             hotReloadEnabled = true;
             System.out.println("Shader hot reload enabled");
 
         } catch (Exception e) {
             System.err.println("Failed to setup shader hot reload: " + e.getMessage());
         }
-    }
-
-    private void watchForChanges() {
-        while (hotReloadEnabled && watchService != null) {
-            try {
-                WatchKey key = watchService.take();
-
-                for (WatchEvent<?> event : key.pollEvents()) {
-                    if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
-                        continue;
-                    }
-
-                    Path changed = (Path) event.context();
-                    String filename = changed.toString();
-
-                    if (filename.endsWith(".vert") || filename.endsWith(".frag")) {
-                        String shaderName = filename.substring(0, filename.lastIndexOf('.'));
-                        reloadShader(shaderName);
-                    }
-                }
-
-                key.reset();
-
-            } catch (InterruptedException e) {
-                break;
-            } catch (Exception e) {
-                System.err.println("Error in shader hot reload: " + e.getMessage());
-            }
-        }
-    }
-
-    public boolean reloadShader(String name) {
-        try {
-            ShaderSource source = sources.get(name);
-            if (source == null) {
-                System.err.println("No source found for shader: " + name);
-                return false;
-            }
-
-            // Cleanup old program
-            ShaderProgram oldProgram = programs.get(name);
-            if (oldProgram != null) {
-                oldProgram.cleanup();
-            }
-
-            // Reload from files
-            Path vertPath = shaderDirectory.resolve(name + ".vert");
-            Path fragPath = shaderDirectory.resolve(name + ".frag");
-
-            if (Files.exists(vertPath) && Files.exists(fragPath)) {
-                String vertSource = Files.readString(vertPath);
-                String fragSource = Files.readString(fragPath);
-
-                createProgram(name, vertSource, fragSource);
-
-                // Post reload event
-                eventBus.post(new ShaderReloadedEvent(name, true, null));
-
-                System.out.println("Reloaded shader: " + name);
-                return true;
-            }
-
-        } catch (Exception e) {
-            String error = "Failed to reload shader '" + name + "': " + e.getMessage();
-            System.err.println(error);
-
-            eventBus.post(new ShaderReloadedEvent(name, false, error));
-            return false;
-        }
-
-        return false;
     }
 
     public ShaderProgram getProgram(String name) {
@@ -352,6 +338,69 @@ public class ShaderModule extends Module {
                     gl_Position = projectionMatrix * viewMatrix * worldPos;
                 }
                 """;
+            case "basic" -> """
+                #version 330 core
+                layout (location = 0) in vec3 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec3 normal;
+                layout (location = 3) in vec4 color;
+                
+                uniform mat4 mvpMatrix;
+                uniform mat4 modelMatrix;
+                uniform mat4 viewMatrix;
+                uniform mat4 projectionMatrix;
+                
+                out vec2 texCoords;
+                out vec3 fragNormal;
+                out vec4 vertexColor;
+                out vec3 fragPos;
+                
+                void main() {
+                    fragPos = (modelMatrix * vec4(position, 1.0)).xyz;
+                    texCoords = texCoord;
+                    fragNormal = mat3(transpose(inverse(modelMatrix))) * normal;
+                    vertexColor = color;
+                    
+                    if (length(mvpMatrix[0]) > 0.1) {
+                        gl_Position = mvpMatrix * vec4(position, 1.0);
+                    } else {
+                        gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+                    }
+                }
+                """;
+            case "skybox" -> """
+                #version 330 core
+                layout (location = 0) in vec3 position;
+                
+                uniform mat4 projectionMatrix;
+                uniform mat4 viewMatrix;
+                
+                out vec3 texCoords;
+                
+                void main() {
+                    texCoords = position;
+                    mat4 rotView = mat4(mat3(viewMatrix));
+                    vec4 pos = projectionMatrix * rotView * vec4(position, 1.0);
+                    gl_Position = pos.xyww;
+                }
+                """;
+            case "ui" -> """
+                #version 330 core
+                layout (location = 0) in vec2 position;
+                layout (location = 1) in vec2 texCoord;
+                layout (location = 2) in vec4 color;
+                
+                uniform mat4 projection;
+                
+                out vec2 texCoords;
+                out vec4 vertexColor;
+                
+                void main() {
+                    texCoords = texCoord;
+                    vertexColor = color;
+                    gl_Position = projection * vec4(position, 0.0, 1.0);
+                }
+                """;
             default -> throw new IllegalArgumentException("Unknown built-in vertex shader: " + name);
         };
     }
@@ -386,6 +435,61 @@ public class ShaderModule extends Module {
                     
                     vec3 result = (ambient + diffuse) * color;
                     fragColor = vec4(result, 1.0);
+                }
+                """;
+            case "basic" -> """
+                #version 330 core
+                in vec2 texCoords;
+                in vec3 fragNormal;
+                in vec4 vertexColor;
+                in vec3 fragPos;
+                
+                uniform vec3 lightPosition;
+                uniform vec3 lightColor;
+                
+                out vec4 fragColor;
+                
+                void main() {
+                    vec4 finalColor = vertexColor;
+                    
+                    if (length(lightPosition) > 0.1) {
+                        vec3 norm = normalize(fragNormal);
+                        vec3 lightDir = normalize(lightPosition - fragPos);
+                        float diff = max(dot(norm, lightDir), 0.0);
+                        finalColor.rgb *= (0.3 + 0.7 * diff);
+                    }
+                    
+                    fragColor = finalColor;
+                }
+                """;
+            case "skybox" -> """
+                #version 330 core
+                in vec3 texCoords;
+                
+                out vec4 fragColor;
+                
+                void main() {
+                    vec3 viewDir = normalize(texCoords);
+                    float height = viewDir.y;
+                    
+                    vec3 skyColor = vec3(0.4, 0.6, 1.0);
+                    vec3 horizonColor = vec3(0.7, 0.8, 1.0);
+                    
+                    float t = max(0.0, height);
+                    vec3 color = mix(horizonColor, skyColor, t);
+                    
+                    fragColor = vec4(color, 1.0);
+                }
+                """;
+            case "ui" -> """
+                #version 330 core
+                in vec2 texCoords;
+                in vec4 vertexColor;
+                
+                out vec4 fragColor;
+                
+                void main() {
+                    fragColor = vertexColor;
                 }
                 """;
             default -> throw new IllegalArgumentException("Unknown built-in fragment shader: " + name);

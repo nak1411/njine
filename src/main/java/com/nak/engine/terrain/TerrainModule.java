@@ -38,29 +38,67 @@ public class TerrainModule extends Module {
 
     @Override
     public void initialize() {
-        // Get configuration
-        settings = getService(TerrainSettings.class);
-        eventBus = getService(EventBus.class);
+        try {
+            // Get configuration with fallback to defaults
+            settings = getOptionalService(TerrainSettings.class);
+            if (settings == null) {
+                System.out.println("TerrainSettings not found, creating default settings");
+                settings = createDefaultTerrainSettings();
 
-        // Initialize components
-        generator = new NoiseGenerator(settings);
-        streamer = new TerrainStreamer(settings, generator);
-        lodManager = new LODManager(settings);
-        renderer = new TerrainRenderer();
-        physics = new TerrainPhysics(generator);
+                // Register the default settings for other systems
+                serviceLocator.register(TerrainSettings.class, settings);
+            }
 
-        // Register services
-        serviceLocator.register(TerrainGenerator.class, generator);
-        serviceLocator.register(TerrainStreamer.class, streamer);
-        serviceLocator.register(LODManager.class, lodManager);
-        serviceLocator.register(TerrainRenderer.class, renderer);
-        serviceLocator.register(TerrainPhysics.class, physics);
+            eventBus = getService(EventBus.class);
 
-        // Register for events
-        eventBus.register(this);
+            // Initialize components
+            generator = new NoiseGenerator(settings);
+            streamer = new TerrainStreamer(settings, generator);
+            lodManager = new LODManager(settings);
+            renderer = new TerrainRenderer();
+            physics = new TerrainPhysics(generator);
 
-        initialized = true;
-        System.out.println("Terrain module initialized");
+            // Register services
+            serviceLocator.register(TerrainGenerator.class, generator);
+            serviceLocator.register(TerrainStreamer.class, streamer);
+            serviceLocator.register(LODManager.class, lodManager);
+            serviceLocator.register(TerrainRenderer.class, renderer);
+            serviceLocator.register(TerrainPhysics.class, physics);
+
+            // Register for events
+            eventBus.register(this);
+
+            initialized = true;
+            System.out.println("Terrain module initialized with settings: " + getTerrainInfo());
+
+        } catch (Exception e) {
+            System.err.println("Failed to initialize terrain module: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Terrain module initialization failed", e);
+        }
+    }
+
+    private TerrainSettings createDefaultTerrainSettings() {
+        TerrainSettings defaultSettings = new TerrainSettings();
+
+        try {
+            // Validate the default settings
+            defaultSettings.validate();
+            System.out.println("Created and validated default terrain settings");
+        } catch (Exception e) {
+            System.err.println("Warning: Default terrain settings validation failed: " + e.getMessage());
+            // Continue with potentially invalid settings rather than fail completely
+        }
+
+        return defaultSettings;
+    }
+
+    private String getTerrainInfo() {
+        return String.format("WorldSize=%.0f ChunkSize=%.0f MaxLOD=%d Octaves=%d",
+                settings.getWorldSize(),
+                settings.getBaseChunkSize(),
+                settings.getMaxLODLevel(),
+                settings.getOctaves());
     }
 
     @Override
@@ -69,9 +107,15 @@ public class TerrainModule extends Module {
 
         try {
             // Update components
-            streamer.update(deltaTime);
-            lodManager.update(deltaTime);
-            renderer.update(deltaTime);
+            if (streamer != null) {
+                streamer.update(deltaTime);
+            }
+            if (lodManager != null) {
+                lodManager.update(deltaTime);
+            }
+            if (renderer != null) {
+                renderer.update(deltaTime);
+            }
 
         } catch (Exception e) {
             System.err.println("Error updating terrain module: " + e.getMessage());
@@ -81,54 +125,123 @@ public class TerrainModule extends Module {
 
     @EventHandler(priority = 5)
     public void onCameraMoved(CameraMovedEvent event) {
-        Vector3f newPos = event.getNewPosition();
-        float distance = lastCameraPosition.distance(newPos);
+        try {
+            Vector3f newPos = event.getNewPosition();
+            float distance = lastCameraPosition.distance(newPos);
 
-        // Only update if camera moved significantly
-        if (distance > settings.getUpdateThreshold()) {
-            streamer.updateCameraPosition(newPos);
-            lodManager.updateCameraPosition(newPos);
-            lastCameraPosition.set(newPos);
+            // Only update if camera moved significantly
+            if (distance > settings.getUpdateThreshold()) {
+                if (streamer != null) {
+                    streamer.updateCameraPosition(newPos);
+                }
+                if (lodManager != null) {
+                    lodManager.updateCameraPosition(newPos);
+                }
+                lastCameraPosition.set(newPos);
+            }
+        } catch (Exception e) {
+            System.err.println("Error handling camera moved event: " + e.getMessage());
         }
     }
 
     public void render() {
         if (initialized && renderer != null) {
-            renderer.render();
+            try {
+                renderer.render();
+            } catch (Exception e) {
+                System.err.println("Error rendering terrain: " + e.getMessage());
+            }
         }
     }
 
     public float getHeightAt(float x, float z) {
-        return physics != null ? physics.getHeightAt(x, z) : 0.0f;
+        if (physics != null) {
+            try {
+                return physics.getHeightAt(x, z);
+            } catch (Exception e) {
+                System.err.println("Error getting height at " + x + ", " + z + ": " + e.getMessage());
+                return 0.0f;
+            }
+        }
+        return 0.0f;
     }
 
     public void invalidateArea(Vector3f center, float radius) {
         if (streamer != null) {
-            streamer.invalidateArea(center, radius);
+            try {
+                streamer.invalidateArea(center, radius);
+            } catch (Exception e) {
+                System.err.println("Error invalidating terrain area: " + e.getMessage());
+            }
         }
     }
 
     @Override
     public void cleanup() {
-        if (renderer != null) renderer.cleanup();
-        if (streamer != null) streamer.cleanup();
-        if (generator != null) generator.cleanup();
+        try {
+            initialized = false;
 
-        initialized = false;
-        System.out.println("Terrain module cleaned up");
+            if (renderer != null) {
+                renderer.cleanup();
+                renderer = null;
+            }
+            if (streamer != null) {
+                streamer.cleanup();
+                streamer = null;
+            }
+            if (generator != null) {
+                generator.cleanup();
+                generator = null;
+            }
+
+            System.out.println("Terrain module cleaned up");
+
+        } catch (Exception e) {
+            System.err.println("Error during terrain module cleanup: " + e.getMessage());
+        }
     }
 
     // Getters for debugging/monitoring
     public String getPerformanceInfo() {
-        if (streamer == null) return "Terrain: Not initialized";
-        return streamer.getPerformanceInfo();
+        if (!initialized) return "Terrain: Not initialized";
+
+        try {
+            if (streamer != null) {
+                return streamer.getPerformanceInfo();
+            }
+            return "Terrain: Initialized but no streamer";
+        } catch (Exception e) {
+            return "Terrain: Error getting performance info";
+        }
     }
 
     public int getActiveChunkCount() {
-        return streamer != null ? streamer.getActiveChunkCount() : 0;
+        if (streamer != null) {
+            try {
+                return streamer.getActiveChunkCount();
+            } catch (Exception e) {
+                System.err.println("Error getting active chunk count: " + e.getMessage());
+            }
+        }
+        return 0;
     }
 
     public int getVisibleChunkCount() {
-        return renderer != null ? renderer.getVisibleChunkCount() : 0;
+        if (renderer != null) {
+            try {
+                return renderer.getVisibleChunkCount();
+            } catch (Exception e) {
+                System.err.println("Error getting visible chunk count: " + e.getMessage());
+            }
+        }
+        return 0;
+    }
+
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    public TerrainSettings getSettings() {
+        return settings;
     }
 }
