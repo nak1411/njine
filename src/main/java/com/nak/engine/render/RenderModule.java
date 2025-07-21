@@ -174,12 +174,8 @@ public class RenderModule extends Module {
             particlePipeline = new ParticlePipeline(settings);
             uiPipeline = new UIPipeline(settings);
 
-            terrainModule = serviceLocator.getOptional(TerrainModule.class);
-            if (terrainModule != null) {
-                System.out.println("🎯 Connected to TerrainModule");
-            } else {
-                System.err.println("❌ TerrainModule not found in service locator!");
-            }
+            // FIX: Try multiple approaches to get TerrainModule
+            terrainModule = acquireTerrainModule();
 
             openGLReady = true;
             System.out.println("✓ Render module OpenGL resources initialized successfully");
@@ -202,7 +198,52 @@ public class RenderModule extends Module {
         return defaultSettings;
     }
 
+    private TerrainModule acquireTerrainModule() {
+        // Strategy 1: Direct lookup from ServiceLocator
+        TerrainModule module = serviceLocator.getOptional(TerrainModule.class);
+        if (module != null) {
+            System.out.println("🎯 Connected to TerrainModule via direct lookup");
+            return module;
+        }
 
+        // Strategy 2: Check if service exists but retrieval failed
+        if (serviceLocator.hasService(TerrainModule.class)) {
+            try {
+                module = serviceLocator.get(TerrainModule.class);
+                System.out.println("🎯 Connected to TerrainModule via forced lookup");
+                return module;
+            } catch (Exception e) {
+                System.err.println("⚠️ TerrainModule exists in ServiceLocator but retrieval failed: " + e.getMessage());
+            }
+        }
+
+        // Strategy 3: Debug ServiceLocator state
+        System.err.println("🔍 ServiceLocator Debug Info:");
+        System.err.println("  - Has TerrainModule service: " + serviceLocator.hasService(TerrainModule.class));
+
+        // Strategy 4: Try to get via ModuleManager if we have access to it
+        try {
+            // Get engine instance through service locator (if registered)
+            if (serviceLocator.hasService("ModuleManager")) {
+                Object moduleManagerObj = serviceLocator.get("ModuleManager", Object.class);
+                if (moduleManagerObj instanceof com.nak.engine.core.ModuleManager) {
+                    com.nak.engine.core.ModuleManager mgr = (com.nak.engine.core.ModuleManager) moduleManagerObj;
+                    module = mgr.getModule(TerrainModule.class);
+                    if (module != null) {
+                        System.out.println("🎯 Connected to TerrainModule via ModuleManager");
+                        // Also register it in ServiceLocator for future use (safe registration)
+                        safeRegisterTerrainModule(module);
+                        return module;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to get TerrainModule via ModuleManager: " + e.getMessage());
+        }
+
+        System.err.println("❌ TerrainModule not found via any strategy - will retry during render");
+        return null;
+    }
 
     private void setupOpenGLState() {
         try {
@@ -336,9 +377,15 @@ public class RenderModule extends Module {
 
     // ADD: Terrain rendering method
     private void renderTerrain(Camera camera) {
+        // Lazy loading: If terrainModule is null, try to acquire it again
         if (terrainModule == null) {
-            System.err.println("❌ TerrainModule not available for rendering");
-            return;
+            terrainModule = acquireTerrainModule();
+
+            // If still null, try one more time with a brief wait for async initialization
+            if (terrainModule == null) {
+                System.err.println("❌ TerrainModule not available for rendering - skipping terrain render");
+                return;
+            }
         }
 
         try {
@@ -348,6 +395,16 @@ public class RenderModule extends Module {
         } catch (Exception e) {
             System.err.println("Error rendering terrain: " + e.getMessage());
             e.printStackTrace();
+
+            // Reset terrainModule to null so we retry acquisition next frame
+            terrainModule = null;
+        }
+    }
+
+    public void refreshTerrainConnection() {
+        terrainModule = acquireTerrainModule();
+        if (terrainModule != null) {
+            System.out.println("✓ TerrainModule connection refreshed successfully");
         }
     }
 
@@ -508,9 +565,27 @@ public class RenderModule extends Module {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private void safeRegisterTerrainModule(TerrainModule module) {
+        try {
+            serviceLocator.register(TerrainModule.class, module);
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to register TerrainModule in ServiceLocator: " + e.getMessage());
+            // Fall back to name-based registration
+            serviceLocator.register("TerrainModule", module);
+        }
+    }
+
     // Getters for access to rendering components
     public RenderQueue getRenderQueue() {
         return renderQueue;
+    }
+
+    public boolean isTerrainAvailable() {
+        if (terrainModule == null) {
+            terrainModule = acquireTerrainModule();
+        }
+        return terrainModule != null;
     }
 
     public RenderContext getRenderContext() {
