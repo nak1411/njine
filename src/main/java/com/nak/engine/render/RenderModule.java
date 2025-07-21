@@ -1,17 +1,20 @@
 package com.nak.engine.render;
 
+import com.nak.engine.camera.Camera;
 import com.nak.engine.config.RenderSettings;
 import com.nak.engine.core.Module;
 import com.nak.engine.events.EventBus;
 import com.nak.engine.events.annotations.EventHandler;
+import com.nak.engine.events.events.OpenGLContextReadyEvent;
 import com.nak.engine.events.events.ShaderReloadedEvent;
 import com.nak.engine.events.events.WindowResizeEvent;
-import com.nak.engine.events.events.OpenGLContextReadyEvent;
 import com.nak.engine.render.culling.FrustumCuller;
 import com.nak.engine.render.pipelines.ParticlePipeline;
 import com.nak.engine.render.pipelines.SkyboxPipeline;
 import com.nak.engine.render.pipelines.TerrainPipeline;
 import com.nak.engine.render.pipelines.UIPipeline;
+import com.nak.engine.terrain.TerrainManager;
+import com.nak.engine.terrain.TerrainModule;
 
 public class RenderModule extends Module {
     private RenderSettings settings;
@@ -31,6 +34,10 @@ public class RenderModule extends Module {
     // State
     private boolean initialized = false;
     private boolean openGLReady = false;
+
+    // Terrain
+    private TerrainModule terrainModule;
+    private TerrainManager terrainManager;
 
     @Override
     public String getName() {
@@ -54,6 +61,10 @@ public class RenderModule extends Module {
             }
 
             eventBus = getService(EventBus.class);
+            System.out.println("🔧 EventBus obtained: " + (eventBus != null));
+
+            eventBus.register(this);
+            System.out.println("RenderModule registered for events");
 
             // Initialize non-OpenGL components first
             renderQueue = new RenderQueue();
@@ -66,16 +77,76 @@ public class RenderModule extends Module {
             serviceLocator.register(FrustumCuller.class, frustumCuller);
             serviceLocator.register(RenderModule.class, this);
 
-            // Register for events BEFORE marking as initialized
+            System.out.println("🔧 Registering RenderModule for events...");
             eventBus.register(this);
+            System.out.println("🔧 RenderModule registered successfully");
 
             initialized = true;
             System.out.println("Render module initialized (waiting for OpenGL context)");
+
+            checkForExistingOpenGLContext();
 
         } catch (Exception e) {
             System.err.println("Failed to initialize render module: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Render module initialization failed", e);
+        }
+    }
+
+    // ADD: Method to handle case where OpenGL context already exists
+    private void checkForExistingOpenGLContext() {
+        try {
+            // Try to get WindowModule and check if context exists
+            WindowModule windowModule = serviceLocator.getOptional(WindowModule.class);
+            if (windowModule != null && windowModule.isContextCreated()) {
+                System.out.println("🔧 OpenGL context already exists - setting up resources directly");
+
+                // Context exists but event might have been missed - set up directly
+                setupOpenGLResourcesDirectly();
+            } else {
+                System.out.println("🔧 No existing OpenGL context found - waiting for event");
+            }
+        } catch (Exception e) {
+            System.out.println("🔧 Could not check existing context: " + e.getMessage());
+            // This is fine - we'll wait for the event
+        }
+    }
+
+
+
+    public void setupOpenGLResourcesDirectly() {
+        if (openGLReady) {
+            System.out.println("✅ OpenGL resources already initialized");
+            return;
+        }
+
+        try {
+            System.out.println("🔧 Setting up OpenGL resources directly...");
+
+            // Verify OpenGL context is available
+            String glVersion = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VERSION);
+            if (glVersion == null) {
+                System.err.println("❌ No OpenGL context available for direct setup");
+                return;
+            }
+
+            System.out.println("🔧 OpenGL Version: " + glVersion);
+
+            // Setup OpenGL state
+            setupOpenGLState();
+
+            // Initialize rendering pipelines
+            terrainPipeline = new TerrainPipeline(settings);
+            skyboxPipeline = new SkyboxPipeline(settings);
+            particlePipeline = new ParticlePipeline(settings);
+            uiPipeline = new UIPipeline(settings);
+
+            openGLReady = true;
+            System.out.println("✅ OpenGL resources initialized directly");
+
+        } catch (Exception e) {
+            System.err.println("❌ Failed to setup OpenGL resources directly: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -103,6 +174,13 @@ public class RenderModule extends Module {
             particlePipeline = new ParticlePipeline(settings);
             uiPipeline = new UIPipeline(settings);
 
+            terrainModule = serviceLocator.getOptional(TerrainModule.class);
+            if (terrainModule != null) {
+                System.out.println("🎯 Connected to TerrainModule");
+            } else {
+                System.err.println("❌ TerrainModule not found in service locator!");
+            }
+
             openGLReady = true;
             System.out.println("✓ Render module OpenGL resources initialized successfully");
 
@@ -123,6 +201,8 @@ public class RenderModule extends Module {
         }
         return defaultSettings;
     }
+
+
 
     private void setupOpenGLState() {
         try {
@@ -220,14 +300,53 @@ public class RenderModule extends Module {
     }
 
     public void render() {
-        if (!initialized || !openGLReady) return;
+        if (!openGLReady) {
+            System.err.println("⚠️  Render called but OpenGL not ready");
+            return;
+        }
 
         try {
-            beginFrame();
-            renderScene();
-            endFrame();
+            // Get camera for rendering
+            Camera camera = serviceLocator.getOptional(Camera.class);
+            if (camera == null) {
+                System.err.println("❌ No camera available for rendering");
+                return;
+            }
+
+            // Clear screen
+            org.lwjgl.opengl.GL11.glClear(
+                    org.lwjgl.opengl.GL11.GL_COLOR_BUFFER_BIT |
+                            org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT
+            );
+
+            // Render terrain
+            renderTerrain(camera);
+
+            // Check for OpenGL errors
+            int error = org.lwjgl.opengl.GL11.glGetError();
+            if (error != org.lwjgl.opengl.GL11.GL_NO_ERROR) {
+                System.err.println("OpenGL error during rendering: " + error);
+            }
+
         } catch (Exception e) {
-            System.err.println("Error during rendering: " + e.getMessage());
+            System.err.println("Error in RenderModule.render(): " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // ADD: Terrain rendering method
+    private void renderTerrain(Camera camera) {
+        if (terrainModule == null) {
+            System.err.println("❌ TerrainModule not available for rendering");
+            return;
+        }
+
+        try {
+            // Let terrain module handle its own rendering
+            terrainModule.render();
+
+        } catch (Exception e) {
+            System.err.println("Error rendering terrain: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -390,14 +509,36 @@ public class RenderModule extends Module {
     }
 
     // Getters for access to rendering components
-    public RenderQueue getRenderQueue() { return renderQueue; }
-    public RenderContext getRenderContext() { return renderContext; }
-    public FrustumCuller getFrustumCuller() { return frustumCuller; }
-    public boolean isOpenGLReady() { return openGLReady; }
+    public RenderQueue getRenderQueue() {
+        return renderQueue;
+    }
+
+    public RenderContext getRenderContext() {
+        return renderContext;
+    }
+
+    public FrustumCuller getFrustumCuller() {
+        return frustumCuller;
+    }
+
+    public boolean isOpenGLReady() {
+        return openGLReady;
+    }
 
     // Pipeline getters for advanced use cases
-    public TerrainPipeline getTerrainPipeline() { return terrainPipeline; }
-    public SkyboxPipeline getSkyboxPipeline() { return skyboxPipeline; }
-    public ParticlePipeline getParticlePipeline() { return particlePipeline; }
-    public UIPipeline getUIPipeline() { return uiPipeline; }
+    public TerrainPipeline getTerrainPipeline() {
+        return terrainPipeline;
+    }
+
+    public SkyboxPipeline getSkyboxPipeline() {
+        return skyboxPipeline;
+    }
+
+    public ParticlePipeline getParticlePipeline() {
+        return particlePipeline;
+    }
+
+    public UIPipeline getUIPipeline() {
+        return uiPipeline;
+    }
 }

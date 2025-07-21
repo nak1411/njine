@@ -86,49 +86,115 @@ public class Engine implements Initializable, Updateable, Cleanupable {
         running = true;
         lastFrameTime = System.nanoTime();
 
-        // Get render module for main loop
+        // Get modules
         RenderModule renderModule = moduleManager.getModule(RenderModule.class);
+        WindowModule windowModule = moduleManager.getModule(WindowModule.class);
 
-        System.out.println("Starting main engine loop...");
+        System.out.println("🚀 Starting main engine loop...");
+
+        // Validate readiness before starting
+        validateSystemReadiness(renderModule, windowModule);
+
+        int frameCount = 0;
+        int readinessCheckCount = 0;
 
         try {
             while (running && !windowModule.shouldClose()) {
                 long currentTime = System.nanoTime();
                 deltaTime = (currentTime - lastFrameTime) / 1_000_000_000.0f;
                 lastFrameTime = currentTime;
-
-                // Cap delta time to prevent spiral of death
                 deltaTime = Math.min(deltaTime, 0.25f);
 
                 // Update all modules
                 update(deltaTime);
 
-                // Process events (important for OpenGL context event)
+                // CRITICAL: Process events every frame
                 eventBus.processEvents();
 
-                // Render frame (only if render module is ready)
+                // Render frame
                 if (renderModule != null && renderModule.isOpenGLReady()) {
                     renderModule.render();
+                    frameCount++;
+
+                    // Periodic success confirmation
+                    if (frameCount == 1) {
+                        System.out.println("✅ First frame rendered successfully!");
+                    }
+                    if (frameCount % 300 == 0) {
+                        System.out.println("✅ " + frameCount + " frames rendered");
+                    }
+                } else {
+                    // Check readiness status periodically
+                    readinessCheckCount++;
+                    if (readinessCheckCount % 60 == 0) { // Every second at 60fps
+                        System.err.println("⏳ Frame " + readinessCheckCount + ": Still waiting for OpenGL readiness");
+
+                        if (renderModule == null) {
+                            System.err.println("   ❌ RenderModule is null!");
+                        } else {
+                            System.err.println("   ❌ RenderModule.isOpenGLReady() = false");
+
+                            // Emergency re-attempt every 5 seconds
+                            if (readinessCheckCount % 300 == 0) {
+                                System.err.println("🚨 Emergency: Re-attempting OpenGL setup...");
+                                try {
+                                    renderModule.setupOpenGLResourcesDirectly();
+                                } catch (Exception e) {
+                                    System.err.println("Emergency setup failed: " + e.getMessage());
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Swap buffers
                 windowModule.swapBuffers();
 
-                // Optional: Limit frame rate
-                if (config.getTargetFps() > 0) {
-                    limitFrameRate();
-                }
+                // Prevent 100% CPU usage
+                Thread.yield();
             }
-
         } catch (Exception e) {
-            System.err.println("Fatal error in main loop: " + e.getMessage());
+            System.err.println("❌ Error in main loop: " + e.getMessage());
             e.printStackTrace();
-            throw new RuntimeException("Engine main loop failed", e);
         } finally {
             cleanup();
-            running = false;
-            System.out.println("Engine stopped");
         }
+    }
+
+    private void validateSystemReadiness(RenderModule renderModule, WindowModule windowModule) {
+        System.out.println("🔍 Validating system readiness...");
+
+        if (windowModule == null) {
+            throw new RuntimeException("WindowModule not found!");
+        }
+
+        if (renderModule == null) {
+            throw new RuntimeException("RenderModule not found!");
+        }
+
+        System.out.println("🔍 WindowModule context created: " + windowModule.isContextCreated());
+        System.out.println("🔍 RenderModule OpenGL ready: " + renderModule.isOpenGLReady());
+
+        if (windowModule.isContextCreated() && !renderModule.isOpenGLReady()) {
+            System.err.println("⚠️  DETECTED: OpenGL context exists but RenderModule not ready");
+            System.err.println("⚠️  This indicates the OpenGLContextReadyEvent was not properly delivered");
+
+            // Force event processing
+            System.out.println("🔄 Force processing events...");
+            eventBus.processEvents();
+
+            // Check again
+            if (!renderModule.isOpenGLReady()) {
+                System.err.println("❌ Event processing didn't help - using direct setup");
+                try {
+                    renderModule.setupOpenGLResourcesDirectly();
+                } catch (Exception e) {
+                    System.err.println("Direct setup also failed: " + e.getMessage());
+                }
+            }
+        }
+
+        System.out.println("🔍 Validation complete");
     }
 
     private void limitFrameRate() {

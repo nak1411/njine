@@ -57,36 +57,44 @@ public class TerrainManager {
     }
 
     private void initializeBasicTerrain() {
-        // Create a larger initial grid to ensure terrain is visible immediately
-        int gridSize = 5; // 5x5 grid for better coverage
+        System.out.println("🌍 Initializing basic terrain grid...");
+
+        // Create terrain around spawn point (0, 100, 3) from camera
+        int gridSize = 7; // 7x7 grid for good coverage
         float chunkSize = BASE_CHUNK_SIZE;
 
-        System.out.println("Initializing basic terrain grid: " + gridSize + "x" + gridSize);
-
+        // Center the grid around origin since camera starts at (0, 100, 3)
         for (int x = -gridSize/2; x <= gridSize/2; x++) {
             for (int z = -gridSize/2; z <= gridSize/2; z++) {
                 Vector3f position = new Vector3f(x * chunkSize, 0, z * chunkSize);
                 String chunkKey = getChunkKey(position, 0);
 
-                TerrainChunk chunk = new TerrainChunk(position, chunkSize, 0);
-                activeChunks.put(chunkKey, chunk);
-
-                // Generate synchronously for immediate availability
                 try {
-                    chunk.generate();
-                    chunk.setVisible(true);
-                    visibleChunks.add(chunk);
-                    bufferUpdateQueue.offer(chunk);
-                    chunksGenerated++;
+                    TerrainChunk chunk = new TerrainChunk(position, chunkSize, 0);
+                    activeChunks.put(chunkKey, chunk);
 
-                    System.out.println("Generated initial chunk at: " + position);
+                    // CRITICAL: Generate terrain synchronously for immediate visibility
+                    chunk.generate();
+
+                    if (chunk.isGenerated()) {
+                        chunk.setVisible(true);
+                        visibleChunks.add(chunk);
+                        bufferUpdateQueue.offer(chunk);
+                        chunksGenerated++;
+
+                        System.out.println("🌍 Generated terrain chunk at: " + position);
+                    } else {
+                        System.err.println("❌ Failed to generate chunk at: " + position);
+                    }
+
                 } catch (Exception e) {
-                    System.err.println("Failed to generate initial chunk at " + position + ": " + e.getMessage());
+                    System.err.println("❌ Error creating terrain chunk at " + position + ": " + e.getMessage());
                 }
             }
         }
 
-        System.out.println("Initialized " + activeChunks.size() + " basic terrain chunks");
+        System.out.println("🌍 Basic terrain initialized: " + activeChunks.size() + " chunks, " +
+                visibleChunks.size() + " visible");
     }
 
     /**
@@ -94,27 +102,38 @@ public class TerrainManager {
      */
     public void update(Vector3f cameraPos, float deltaTime) {
         if (!initialized || cameraPos == null) {
+            System.err.println("⚠️  TerrainManager.update() called but not ready");
             return;
         }
 
         synchronized (updateLock) {
             try {
+                // ALWAYS update camera position
                 updateCameraTracking(cameraPos, deltaTime);
 
-                // Only perform expensive updates if camera moved significantly or time elapsed
-                if (shouldUpdateTerrain()) {
-                    System.out.println("Updating terrain for camera at: " + cameraPos);
-                    updateTerrainLOD();
-                    updateChunkVisibility();
-                    lastCameraPos.set(currentCameraPos);
+                // DEBUG: Log camera position changes
+                float distance = currentCameraPos.distance(lastCameraPos);
+                if (distance > 1.0f) {
+                    System.out.println("🌍 Camera moved to: " +
+                            String.format("(%.1f, %.1f, %.1f)", cameraPos.x, cameraPos.y, cameraPos.z));
                 }
 
                 // Always process buffer updates
                 processBufferUpdates();
+
+                // Periodic terrain updates
+                if (shouldUpdateTerrain()) {
+                    System.out.println("🌍 Updating terrain for camera position");
+                    updateTerrainLOD();
+                    updateChunkVisibility();
+                    lastCameraPos.set(currentCameraPos);
+                    lastUpdateTime = System.currentTimeMillis();
+                }
+
                 updatePerformanceMetrics();
 
             } catch (Exception e) {
-                System.err.println("Error in terrain update: " + e.getMessage());
+                System.err.println("❌ Error in terrain update: " + e.getMessage());
                 e.printStackTrace();
             }
         }

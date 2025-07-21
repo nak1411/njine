@@ -43,6 +43,7 @@ public class TerrainChunk {
     private int vbo = 0;
     private int ebo = 0;
     private int indexCount = 0;
+    private int vertexCount = 0;
 
     // Enhanced noise parameters
     private static final float BASE_AMPLITUDE = 30.0f;
@@ -192,7 +193,7 @@ public class TerrainChunk {
 
         // Vertex layout: pos(3) + tex(2) + normal(3) + tangent(3) + color(3) = 14 floats
         int vertexSize = 14;
-        int vertexCount = resolution * resolution;
+        int calculatedVertexCount = resolution * resolution;
         int triangleCount = (resolution - 1) * (resolution - 1) * 2;
 
         vertices = new float[vertexCount * vertexSize];
@@ -208,6 +209,7 @@ public class TerrainChunk {
         generateOptimizedIndices(resolution);
 
         indexCount = indices.length;
+        vertexCount = calculatedVertexCount;
 
         // Validate generated data
         if (vertices.length == 0 || indices.length == 0) {
@@ -403,11 +405,17 @@ public class TerrainChunk {
      */
     public void createBuffers() {
         if (!generated || buffersCreated || vertices == null || indices == null) {
-            return; // Skip if not ready, already created, or data was freed
+            System.err.println("⚠️  Cannot create buffers - not ready. Generated: " + generated +
+                    ", BuffersCreated: " + buffersCreated +
+                    ", VerticesNull: " + (vertices == null) +
+                    ", IndicesNull: " + (indices == null));
+            return;
         }
 
         try {
-            System.out.println("Creating buffers for chunk at " + position);
+            System.out.println("🔧 Creating OpenGL buffers for chunk at " + position);
+            System.out.println("🔧 Vertex data: " + vertices.length + " floats (" + vertexCount + " vertices)");
+            System.out.println("🔧 Index data: " + indices.length + " indices (" + (indexCount / 3) + " triangles)");
 
             // Generate VAO
             vao = glGenVertexArrays();
@@ -447,10 +455,17 @@ public class TerrainChunk {
             buffersCreated = true;
             needsUpdate = false;
 
-            System.out.println("Successfully created buffers for chunk at " + position);
+            System.out.println("✅ Successfully created buffers for chunk at " + position);
+            System.out.println("✅ VAO: " + vao + ", VBO: " + vbo + ", EBO: " + ebo);
+
+            // Validate buffers were created
+            int error = glGetError();
+            if (error != GL_NO_ERROR) {
+                System.err.println("❌ OpenGL error after creating buffers: " + error);
+            }
 
         } catch (Exception e) {
-            System.err.println("Error creating buffers for terrain chunk at " + position + ": " + e.getMessage());
+            System.err.println("❌ Error creating buffers for terrain chunk at " + position + ": " + e.getMessage());
             e.printStackTrace();
             cleanup(); // Clean up any partially created resources
         }
@@ -489,11 +504,20 @@ public class TerrainChunk {
         }
 
         try {
+            // Bind VAO and render
             glBindVertexArray(vao);
-            glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, 0);
+
+            if (indexCount > 0) {
+                glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, 0);
+            } else {
+                // Fallback to vertex rendering
+                glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+            }
+
             glBindVertexArray(0);
+
         } catch (Exception e) {
-            System.err.println("Error rendering terrain chunk at " + position + ": " + e.getMessage());
+            System.err.println("Error rendering terrain chunk: " + e.getMessage());
         }
     }
 
@@ -552,7 +576,18 @@ public class TerrainChunk {
     }
 
     public boolean isReadyToRender() {
-        return generated && visible && buffersCreated && vao != 0 && indexCount > 0;
+        boolean ready = generated && visible && buffersCreated && vao != 0 &&
+                (indexCount > 0 || vertexCount > 0);
+
+        if (!ready && generated && visible && buffersCreated) {
+            // Log specific issue
+            System.err.println("⚠️  Chunk ready but missing geometry - VAO: " + vao +
+                    ", IndexCount: " + indexCount +
+                    ", VertexCount: " + vertexCount);
+        }
+
+        return ready;
+
     }
 
     public void setVisible(boolean visible) {
@@ -599,6 +634,10 @@ public class TerrainChunk {
     // Getters
     public Vector3f getPosition() {
         return new Vector3f(position);
+    }
+
+    public int getVertexCount() {
+        return vertexCount;
     }
 
     public float getSize() {

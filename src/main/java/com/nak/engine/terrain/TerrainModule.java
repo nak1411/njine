@@ -1,5 +1,6 @@
 package com.nak.engine.terrain;
 
+import com.nak.engine.camera.Camera;
 import com.nak.engine.config.TerrainSettings;
 import com.nak.engine.core.Module;
 import com.nak.engine.events.EventBus;
@@ -21,6 +22,8 @@ public class TerrainModule extends Module {
     private LODManager lodManager;
     private TerrainRenderer renderer;
     private TerrainPhysics physics;
+
+    private TerrainManager terrainManager;
 
     // State
     private Vector3f lastCameraPosition = new Vector3f();
@@ -45,6 +48,7 @@ public class TerrainModule extends Module {
                 System.out.println("TerrainSettings not found, creating default settings");
                 settings = createDefaultTerrainSettings();
 
+                terrainManager = new TerrainManager();
                 // Register the default settings for other systems
                 serviceLocator.register(TerrainSettings.class, settings);
             }
@@ -64,6 +68,7 @@ public class TerrainModule extends Module {
             serviceLocator.register(LODManager.class, lodManager);
             serviceLocator.register(TerrainRenderer.class, renderer);
             serviceLocator.register(TerrainPhysics.class, physics);
+            serviceLocator.register(TerrainModule.class, this);
 
             // Register for events
             eventBus.register(this);
@@ -106,19 +111,39 @@ public class TerrainModule extends Module {
         if (!initialized) return;
 
         try {
-            // Update components
+            // Get current camera position
+            Camera camera = serviceLocator.getOptional(Camera.class);
+            if (camera == null) {
+                System.err.println("❌ No camera for terrain updates");
+                return;
+            }
+
+            Vector3f cameraPos = camera.getPosition();
+
+            // CRITICAL: Update TerrainManager with camera position
+            if (terrainManager != null) {
+                terrainManager.update(cameraPos, deltaTime);
+            }
+
+            // Update other components
             if (streamer != null) {
+                streamer.updateCameraPosition(cameraPos);
                 streamer.update(deltaTime);
             }
+
             if (lodManager != null) {
+                lodManager.updateCameraPosition(cameraPos);
                 lodManager.update(deltaTime);
             }
+
             if (renderer != null) {
                 renderer.update(deltaTime);
             }
 
+            lastCameraPosition.set(cameraPos);
+
         } catch (Exception e) {
-            System.err.println("Error updating terrain module: " + e.getMessage());
+            System.err.println("❌ Error updating terrain module: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -145,14 +170,31 @@ public class TerrainModule extends Module {
     }
 
     public void render() {
-        if (initialized && renderer != null) {
-            try {
-                renderer.render();
-            } catch (Exception e) {
-                System.err.println("Error rendering terrain: " + e.getMessage());
+        if (!initialized) {
+            System.err.println("❌ TerrainModule.render() called but not initialized");
+            return;
+        }
+
+        try {
+            // Use TerrainManager for rendering instead of basic renderer
+            if (terrainManager != null) {
+                terrainManager.render();
+                System.out.println("🌍 TerrainModule.render() called TerrainManager");
+            } else {
+                System.err.println("❌ No TerrainManager available for rendering");
             }
+
+        } catch (Exception e) {
+            System.err.println("❌ Error rendering terrain: " + e.getMessage());
+            e.printStackTrace();
         }
     }
+
+    // ADD: Getter for external access
+    public TerrainManager getTerrainManager() {
+        return terrainManager;
+    }
+
 
     public float getHeightAt(float x, float z) {
         if (physics != null) {

@@ -222,6 +222,8 @@ public class WindowModule extends Module {
 
         // Show window
         glfwShowWindow(window);
+
+        glfwFocusWindow(window);
     }
 
     private void initializeOpenGL() {
@@ -286,6 +288,7 @@ public class WindowModule extends Module {
             );
 
             System.out.println("Broadcasting OpenGL context ready event...");
+            eventBus.postImmediate(event);
             eventBus.post(event);
 
             // Give the event bus time to process

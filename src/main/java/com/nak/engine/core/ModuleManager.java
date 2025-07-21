@@ -40,23 +40,43 @@ public class ModuleManager implements Initializable, Updateable, Cleanupable {
             // Sort modules by priority
             modules.sort(Comparator.comparingInt(Module::getInitializationPriority));
 
+            System.out.println("🔧 Module initialization order:");
+            for (Module module : modules) {
+                System.out.println("  " + module.getInitializationPriority() + ": " + module.getName());
+            }
+
             // Initialize modules in order
             for (Module module : modules) {
                 try {
-                    System.out.println("Initializing module: " + module.getName());
+                    System.out.println("🔧 Initializing module: " + module.getName());
                     module.initialize();
 
                     // Register module in service locator
+                    @SuppressWarnings("unchecked")
+                    Class<Module> moduleClass = (Class<Module>) module.getClass();
+                    serviceLocator.register(moduleClass, module);
                     serviceLocator.register(module.getClass().getName(), module);
 
+                    // CRITICAL: Process events after each module initialization
+                    // This ensures events fired during init are handled immediately
+                    if (eventBus != null) {
+                        eventBus.processEvents();
+                    }
+
                 } catch (Exception e) {
-                    System.err.println("Failed to initialize module: " + module.getName());
+                    System.err.println("❌ Failed to initialize module: " + module.getName());
                     throw new RuntimeException("Module initialization failed", e);
                 }
             }
 
             initialized = true;
-            System.out.println("All modules initialized successfully");
+            System.out.println("✅ All modules initialized successfully");
+
+            // Final event processing pass
+            if (eventBus != null) {
+                System.out.println("🔧 Final event processing pass...");
+                eventBus.processEvents();
+            }
 
         } catch (Exception e) {
             cleanup();
